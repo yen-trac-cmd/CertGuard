@@ -1,0 +1,85 @@
+[general]
+# Optionally set mitmproxy console eventlog verbosity level.  Valid levels are: "debug", "info", "warn", "error", or "alert".  It not set, mitmproxy defaults to "info".
+# You can change the logging level dynamically inside mitmproxy by adjusting the 'console_eventlog_verbosity' level inside the Options ("O") menu.
+logging_level = "debug"
+
+# Provide a floating point decimal value for DNS timeout threshold (measured in seconds).
+dns_timeout = 0.30
+
+# Provide IP(s) for trusted DNS resolvers, preferrably that support DNSSEC validation. 
+# CertGuard will rotate through configured resolvers in round-robin fashion to avoid being ratelimited by upstream providers
+resolvers = ['1.1.1.1', '9.9.9.9', '8.8.8.8'] # Cloudflare, Quad9, and Google resolvers, respectively.
+
+# OPTIONAL: Provide the path to a directory that contains custom root certificate files in PEM format.
+# Note: All root certificate files must have a ".pem" file extension.
+custom_roots_dir = "./custom_roots/"
+
+# Configure path to SQLite database that will hold certificate information & prior approval decisions
+db_path = "./Guard.db"
+
+# Set the intercept mode to "strict" to enforce CertGuard inspection for ALL HTTP requests, or "compatible" to inspect only on the initial navigation to a new website.
+# New site navigations are determined through a heuristic that focuses only on a website's main HTML document that is initially retreived via a GET request.
+#    WARNING: Strict mode may interefere with loading subresources for a website, some HTTP POSTs, and/or API-based data exchanges via Fetch, AJAX / XMLHttpRequest,
+#    REST and SOAP web services, Single-Page Apps (SPA), etc. Any request for which the browser expects non-HTML content in return will be impacted.
+#    This mode offers the most comprehensive protection against potentially malicious certificates, but comes at the expense of user experience and 
+#    is NOT recommended for day-to-day usage.
+intercept_mode = "compatible"
+
+# Two methods are supported for injecting the CertGuard request-tracking token into browser sessions:
+#  1. "header" - Requires JavaScript, but makes for a cleaner UI since users will not see the token being injected as a URL query parameter.  
+#                Also avoids tokens from being captured in proxy logs, browser history, or bookmarks.
+#  2. "post"   - Similar benefits as 'header' method; uses a basic form POST and does not require JavaScript.
+#  3. "get"    - Injects the CertGuard token as a URL query parameter visible to the end user, but does not require JavaScript.
+token_mode = "get"
+
+
+[country_filtering]
+# Set mode to "allow" to bypass certificate country checks for the countries specified in 'country_list'; all other countries will generate a warning.
+# Set mode to "warn" to generate warnings for countries specified in 'country_list'; certificate country checks for all other countries will be bypassed.
+filtering_mode = "allow"
+
+# Define list of allowed or denied countries, using iso-3166-alpha2 codes.
+# Countries will be compared against "C=" value extracted from certificate Subject fields.
+# https://www.rfc-editor.org/rfc/rfc5280.html#appendix-A.1
+# https://www.iso.org/obp/ui/#search/code/
+#country_list = ['AU','CA','GB','NZ','US']  # Five Eyes alliance countries
+#country_list = ['AL','BE','BG','CA','HR','CZ','DK','EE','FI','FR','DE','GR','HU','IS','IT','LV','LT','LU','ME','NL','MK','NO','PL','PT','RO','SK','SI','ES','SE','TR','GB','US']  # NATO Countries - https://www.nato.int
+#country_list = ['AR','AU','BH','BR','CO','EG','IL','JP','JO','KE','KW','MA','NZ','PK','PH','QA','KR','TH','TN']  # MNNA Countries as defined in 22USC §2321k and 10USC §2350a - https://www.state.gov/major-non-nato-ally-status
+#country_list = ['AM','AZ','BY','KG','KZ','MD','RU','TJ','UZ']  # CIS Full Members (Moldova and Ukraine do not qualify) - https://eccis.org/map
+#country_list = ['CN','CU','HK','IR','KP','MO','RU','VE']  # US Foreign Adversaries as defined in 15 CFR § 791.4 - https://www.ecfr.gov/current/title-15/subtitle-B/chapter-VII/subchapter-E/part-791/subpart-A/section-791.4
+country_list = ['BE','GB','US']
+
+# Specify iso-3166-alpha2 codes for countries that will raise a level-6 / fatal error that cannot by bypassed by users, irrespective of country filtering mode.
+blocklist = ['CN','IR','KP','RU']
+
+
+[controlled_roots]
+# List the X.509v3 Common Name (CN) and/or Organization (O) value(s) for any root CA certs that you wish to warn or prohibit access to.  
+# Restricted roots will raise a Level-5 browser warning that users can click through.
+# Prohibited roots will raise a Level-6 error that cannot be bypassed.
+#restricted_roots = []
+restricted_roots = ['VeriSign, Inc.', 'DigiCert Global Root G2']                          # For testing purposes 
+prohibited_roots = ['Fina Root CA', 'Financijska agencija']
+
+
+[caa_exceptions]
+# Some domains on the Public Suffix List (https://publicsuffix.org/list/public_suffix_list.dat) are expected to exert CAA control over customer-generated subdomains, notably cloud
+# vendors, hosting providers (especially low/no-code platforms), & government sites.  eTLD entries in this list will be exempt from warnings CertGuard would otherwise raise.
+exempt_eTLDs = ['adobeaemcloud.com', 'adobeaemcloud.net', 'alibabacloudcs.com', 'alwaysdata.net', 'apigee.io', 'ap.ngrok.io', 'apps-1and1.com', 'apps-1and1.net', 'appspacehosted.com', 'appspaceusercontent.com', 'appspot.com', 'au.ngrok.io', 'azure-api.net', 'azureedge.net', 'azurefd.net', 'ba.gov.br', 'barsy.bg', 'barsy.ca', 'barsycenter.com', 'barsy.club', 'barsy.co.uk', 'barsy.de', 'barsy.dev', 'barsy.eu', 'barsy.gr', 'barsy.in', 'barsy.info', 'barsy.io', 'barsy.me', 'barsy.menu', 'barsy.mobi', 'barsy.net', 'barsy.online', 'barsyonline.com', 'barsyonline.co.uk', 'barsyonline.menu', 'barsyonline.shop', 'barsy.org', 'barsy.pro', 'barsy.pub', 'barsy.ro', 'barsy.rs', 'barsy.shop', 'barsy.site', 'barsy.store', 'barsy.support', 'barsy.uk', 'beagleboard.io', 'bitbucket.io', 'blogspot.com', 'box.ca', 'brave.app', 'brave.io', 'bubbleapps.io', 'cdn-edges.net', 'cloudaccess.host', 'cloudaccess.net', 'cloudbeesusercontent.io', 'cloudflare-ipfs.com', 'cloudfront.net', 'cloudfunctions.net', 'cloudycluster.net', 'co.business', 'codespot.com', 'co.education', 'co.events', 'co.financial', 'co.network', 'convex.app', 'convex.site', 'co.place', 'co.technology', 'demo.jelastic.com', 'discourse.group', 'discourse.team', 'dscloud.me', 'dscloud.mobi', 'dsmynas.net', 'durumis.com', 'edgecompute.app', 'elementor.cool', 'eu.ngrok.io', 'eu.pythonanywhere.com', 'familyds.net', 'fastly-edge.com', 'fastlylb.net', 'firebaseapp.com', 'fr-1.paas.massivegrid.net', 'framer.ai', 'framer.app', 'framercanvas.com', 'framer.media', 'framer.photos', 'framer.website', 'framer.wiki', 'freedesktop.org', 'freesite.host', 'github.io', 'githubusercontent.com', 'gitlab.io', 'go.gov.br','googleapis.com', 'googlecode.com', 'gov.ao', 'gov.et', 'gov.nl', 'hotelwithflight.com', 'icp0.io', 'in.ngrok.io', 'it.com', 'jdevcloud.com', 'jp.ngrok.io', 'ladesk.com', 'live-website.com', 'mayfirst.org', 'mediatech.by', 'mil.tt', 'myqnapcloud.com', 'myrdbx.io', 'myspreadshop.at', 'myspreadshop.be', 'myspreadshop.ca', 'myspreadshop.ch', 'myspreadshop.com', 'myspreadshop.com.au', 'myspreadshop.co.uk', 'myspreadshop.de', 'myspreadshop.dk', 'myspreadshop.es', 'myspreadshop.fi', 'myspreadshop.fr', 'myspreadshop.ie', 'myspreadshop.it', 'myspreadshop.net', 'myspreadshop.nl', 'myspreadshop.no', 'myspreadshop.pl', 'myspreadshop.se', 'na4u.ru', 'netlify.app', 'nfshost.com', 'nog.community', 'noticeable.news', 'onid.ca', 'onrender.com', 'ox.rs', 'pages.torproject.net', 'pagexl.com', 'postman-echo.com', 'pr.gov.br', 'pstmn.io', 'pythonanywhere.com', 'qualifioapp.com', 'readthedocs.io', 'reserve-online.net', 'ro.gov.br', 'rub.de', 'ruhr-uni-bochum.de', 'sa.ngrok.io', 'schulserver.de', 'siteleaf.net', 'stackhero-network.com', 'tech.orange', 'tlon.network', 'to.gov.br', 'torproject.net', 'translate.goog', 'ts.net', 'typedream.app', 'ui.nabu.casa', 'us.ngrok.io', 'utwente.io', 'v0.build', 'vercel.app', 'vercel.dev', 'vercel.run', 'vusercontent.net', 'web.app', 'websitebuilder.online', 'webspace-host.com', 'webthings.io', 'withgoogle.com', 'withyoutube.com', 'wpdevcloud.com']
+
+
+[tls_config]
+# OPTIONAL: This section configures TLS parameters for the connection between mitmproxy and upstream servers.
+#
+# The monthly "SSL Pulse" survey conducted by Qualys SSL Labs (see https://www.ssllabs.com/ssl-pulse/) from June, 2025 found that 100% of surveyed sites supported TLSv1.2, 
+# while only 75.3% support TLSv1.3, so to acheive a balance between security and backwards compatibility, the 'min_tls_version' defaults to version 1.2.
+# Select from minimum TLS versions of 1.0, 1.1, 1.2, or 1.3.  
+min_tls_version = 1.2
+
+# Provide a colon-delimited string of ciphersuites for use by mitmproxy's underlying OpenSSL library.  You can specify ciphersuites using OpenSSL naming or the official IANA TLS
+# Cipher Suites names documented at https://www.iana.org/assignments/tls-parameters/tls-parameters.xhtml#tls-parameters-4.
+ciphersuites = "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256:TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256:TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384:TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384:TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256:TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256:TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA:TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA:TLS_RSA_WITH_AES_128_GCM_SHA256:TLS_RSA_WITH_AES_256_GCM_SHA384:TLS_RSA_WITH_AES_128_CBC_SHA:TLS_RSA_WITH_AES_256_CBC_SHA"  # Same ciphersuites as Chrome 140.0.7339.208.
+
+[sct_config]
+# Set verify_signatures to true to locally validate the digital signature of all returned Signed Certificate Timestamps
+verify_signatures = true

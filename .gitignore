@@ -1,13 +1,11 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
-cert-transparency-go/
-thesis/
-testing/
-curl-impersonate_lexiforest/
 custom_roots/
 *.db
 *.log
 *.py[codz]
 *$py.class
 Audit_path_verification.py
-thesis.py
+dns-lookup-type.sh
+
+

@@ -7,6 +7,7 @@ import logging
 import os
 import requests
 import time
+from requests_cache import CachedSession, filesystem
 from helper_functions import get_cert_domains
 from cryptography import x509, exceptions
 from cryptography.hazmat.backends import default_backend
@@ -14,12 +15,9 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.serialization import  Encoding, PublicFormat, load_der_public_key
 from cryptography.x509.oid import ExtensionOID
+from datetime import timedelta
 from enum import IntEnum
 from mitmproxy import http
-#from pyasn1.codec.der import decoder as asn1_decoder, encoder as asn1_encoder
-#from pyasn1_modules import rfc5280
-#from pyasn1.type import univ
-#from urllib.request import Request, urlopen 
 
 # Fetch SSLMate API key from environment variable.  TODO: Migrate to proper key vault.
 try:
@@ -30,8 +28,6 @@ except:
 SSLMATE_QUERY_URL = "https://api.certspotter.com/v1/issuances"
 CT_LOG_LIST_URL   = "https://www.gstatic.com/ct/log_list/v3/log_list.json"     # Google's CT Log list
 LOG_LIST          = "./log_list.json"                                          # Locally cached copy of Google CT Log list
-LEAF_TYPE_CERT    = b'\x00'                                                    # RFC 6962 constant
-LEAF_TYPE_PRECERT = b'\x01'                                                    # RFC 6962 constant
 
 class RevocationReason(IntEnum):
     def __new__(cls, value: int, description: str):
@@ -56,46 +52,62 @@ class RevocationReason(IntEnum):
     def _missing_(cls, value: int):
         return cls.unknown
 
-def fetch_and_cache(url, cache_file):
+def fetch_and_cache(url, cache_file, desc):
     resp = requests.get(url, timeout=3)
     resp.raise_for_status()
     with open(cache_file, 'wb') as f:
         f.write(resp.content)
-    logging.info(f"Fetched & loaded CT log list from {url}; cached under {cache_file}.")
+    logging.info(f"Fetched & loaded {desc} from {url}; cached under {cache_file}.")
     return resp.json()
 
-def get_ct_log_list():
+'''
+def get_ext_file(local_file, url, file_desc, stale_days):
     """
-    Loads the CT log list from cache or fetches a fresh copy if missing or stale.
-    Returns the loaded log_list JSON object.
+    Loads the requested external file from cache or fetches a fresh copy from the provided URL if missing or stale.
+    Returns the raw file.
     """
-    if not os.path.exists(LOG_LIST):
-        logging.info(f"{LOG_LIST} missing; fetching current copy from {CT_LOG_LIST_URL}.")
-        log_list = fetch_and_cache(CT_LOG_LIST_URL, LOG_LIST)
-    else:
-        last_modified = datetime.datetime.fromtimestamp(os.path.getmtime(LOG_LIST))
-        age_days = (datetime.datetime.now() - last_modified).days
-        size = os.path.getsize(LOG_LIST)
+    if not os.path.exists(local_file):
+        logging.info(f"{local_file} missing; fetching current copy from {url}.")
+        try:
+            file = fetch_and_cache(url, local_file, file_desc)
+        except Exception as e:
+            logging.fatal(f'Cannot retrieve {file_desc} dependency file from {url}!')        
 
-        if age_days > 0 or size == 0:
-            logging.info(f"{LOG_LIST} is stale (age={age_days}d, size={size} bytes); refreshing with latest authoritative copy from {CT_LOG_LIST_URL}.")
-            try:
-                log_list = fetch_and_cache(CT_LOG_LIST_URL, LOG_LIST)
-            except Exception as e:
-                logging.error(f"Failed to refresh Certificate Transparency log list from {CT_LOG_LIST_URL}: {e}; using cached copy.")
-                with open(LOG_LIST, 'rb') as f:
-                    log_list = json.load(f)
-        else:
-            with open(LOG_LIST, 'rb') as f:
-                log_list = json.load(f)
-            logging.info(f"Successfully loaded cached Google Certificate Transparency log list from {LOG_LIST}.")
-    return log_list
+    last_modified = datetime.datetime.fromtimestamp(os.path.getmtime(local_file))
+    age_days = (datetime.datetime.now() - last_modified).days
+    size = os.path.getsize(local_file)
+
+    if age_days > stale_days or size == 0:
+        logging.info(f"{local_file} is stale (age={age_days}d, size={size} bytes); refreshing with latest authoritative copy from {url}.")
+        try:
+            file = fetch_and_cache(url, local_file, file_desc)
+        except Exception as e:
+            logging.error(f"Failed to refresh {file_desc} from {url}: {e}; using cached copy.")
+            with open(local_file, 'rb') as f:
+                file = json.load(f)
+    else:
+        with open(local_file, 'rb') as f:
+            file = json.load(f)
+        logging.info(f"Successfully loaded cached {file_desc} from {local_file}.")
+
+    return file
+'''
 
 def load_ct_log_list():
     """
     Loads the CT log list and transforms it into a mapping of log_id_bytes to log entry metadata.
     """
-    log_list = get_ct_log_list()
+    
+    session = CachedSession('ct_log_list.json', expire_after=timedelta(hours=24), backend="filesystem")
+    ct_log_list = session.get(CT_LOG_LIST_URL)
+
+    if ct_log_list.from_cache:
+        logging.warning('Certificate Transparency log list retreived from cache.')
+    else:
+        logging.warning(f'Fresh Certificate Transparency log list retreived from {CT_LOG_LIST_URL}.')
+
+    log_list = ct_log_list.json()
+    #log_list = get_ext_file(LOG_LIST, CT_LOG_LIST_URL, "CT log list", 0)
 
     # Transform log_list mapping
     mapping = {}

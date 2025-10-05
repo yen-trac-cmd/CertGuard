@@ -1,12 +1,11 @@
 from ca_org_mapping import ca_org_to_caa
-from CertGuardConfig import CertGuardConfig
+from CertGuardConfig import Config, ErrorLevel
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519, ed448, dsa, padding
 from datetime import datetime, timedelta, timezone
 from dns.rdtypes.ANY import CAA
-from enum import Enum
 from error_screen import error_screen
 from helper_functions import cert_to_x509, get_cert_domains, supported_ciphers_list
 from mitmproxy import ctx, http
@@ -20,7 +19,57 @@ import sys
 import uuid
 import verify_SCTs
 
-CONFIG = CertGuardConfig()
+CONFIG = Config()
+
+def load(loader):
+    if CONFIG.logging_level in ["debug", "info", "warn", "error", "alert"]:
+        opts = ctx.options.keys()
+        if "console_eventlog_verbosity" in opts:
+            # Running in mitmproxy console UI
+            ctx.log.info("Detected mitmproxy console UI")
+            ctx.options.console_eventlog_verbosity = CONFIG.logging_level
+        else:
+            # Running in mitmdump (or mitmweb)
+            ctx.log.info("Detected mitmdump/mitmweb")
+            ctx.options.termlog_verbosity = CONFIG.logging_level
+    else:
+        logging.warning(f"Invalid console logging mode defined in config.toml; defaulting to 'info' level.")
+    
+    match CONFIG.min_tls_version:
+        case 1.0:
+            ctx.options.tls_version_server_min = "TLS1"
+        case 1.1:
+            ctx.options.tls_version_server_min = "TLS1_1"
+        case 1.2:
+            ctx.options.tls_version_server_min = "TLS1_2"
+        case 1.3:
+            ctx.options.tls_version_server_min = "TLS1_3"
+        case _:
+            ctx.options.tls_version_server_min = "TLS1_2"
+    logging.debug(f'Minimum TLS version for upstream connection set to {ctx.options.tls_version_server_min}.')
+
+    if CONFIG.ciphersuites != None:
+        supported_ciphers = supported_ciphers_list()
+        target_ciphers = []
+        for cipher in CONFIG.ciphersuites.split(':'):
+            if cipher in supported_ciphers:
+                target_ciphers.append(cipher)
+        ctx.options.ciphers_server = ":".join(target_ciphers)
+        logging.debug(f'Configured ciphers: \n* {"\n* ".join(target_ciphers)}')
+
+    # Create SQLite DB and table if not exists
+    with sqlite3.connect(CONFIG.db_path) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS decisions (
+                host TEXT PRIMARY KEY,
+                decision TEXT,
+                root TEXT,
+                timestamp TEXT
+            )
+        """)
+        conn.commit()
+
+    logging.warning(f"===> Reloaded CertGuard Addon")
 
 def get_root_store():
     # Load trusted roots from certifi
@@ -60,93 +109,6 @@ def get_root_store():
                 
     logging.info(f'Total root certificates loaded: {len(roots)}')
     return roots
-
-def load(loader):
-    if CONFIG.logging_level in ["debug", "info", "warn", "error", "alert"]:
-        opts = ctx.options.keys()
-        if "console_eventlog_verbosity" in opts:
-            # Running in mitmproxy console UI
-            ctx.log.info("Detected mitmproxy console UI")
-            ctx.options.console_eventlog_verbosity = CONFIG.logging_level
-        else:
-            # Running in mitmdump (or mitmweb)
-            ctx.log.info("Detected mitmdump/mitmweb")
-            ctx.options.termlog_verbosity = CONFIG.logging_level
-    else:
-        logging.warning(f"Invalid console logging mode defined in config.toml; defaulting to 'info' level.")
-    
-    if type(CONFIG.dns_timeout) != float:
-        logging.fatal(f"dns_timeout in config.toml must be configured as floating point value!")
-
-    if CONFIG.filtering_mode not in ['allow', 'warn']:
-        logging.fatal(f"Invalid country filtering mode defined in config.toml!")
-
-    if CONFIG.intercept_mode not in ['compatible', 'strict']:
-        logging.fatal(f"Invalid 'intercept_mode' defined in config.toml!")
-
-    if CONFIG.token_mode not in ['header', 'post', 'get']:
-        logging.fatal(f"Invalid 'token_mode' defined in config.toml!")
-
-    for entries in [CONFIG.country_list, CONFIG.blocklist]:
-        if not all(isinstance(country, str) and len(country) == 2 for country in entries):
-            raise AssertionError("All countries in config.toml must be specified as 2-character iso-3166-alpha2 codes!")
-        
-        unrecognized = [entry for entry in entries if entry not in CONFIG.iso_country_map]
-        assert not unrecognized, f"Unrecognized country specified in config.toml: {unrecognized}!"
-
-    match CONFIG.min_tls_version:
-        case 1.0:
-            ctx.options.tls_version_server_min = "TLS1"
-        case 1.1:
-            ctx.options.tls_version_server_min = "TLS1_1"
-        case 1.2:
-            ctx.options.tls_version_server_min = "TLS1_2"
-        case 1.3:
-            ctx.options.tls_version_server_min = "TLS1_3"
-        case _:
-            ctx.options.tls_version_server_min = "TLS1_2"
-    logging.debug(f'Minimum TLS version for upstream connection set to {ctx.options.tls_version_server_min}.')
-
-    if CONFIG.ciphersuites != None:
-        supported_ciphers = supported_ciphers_list()
-        target_ciphers = []
-        for cipher in CONFIG.ciphersuites.split(':'):
-            if cipher in supported_ciphers:
-                target_ciphers.append(cipher)
-        ctx.options.ciphers_server = ":".join(target_ciphers)
-        logging.debug(f'Configured ciphers: \n* {"\n* ".join(target_ciphers)}')
-
-    # Create SQLite DB and table if not exists
-    with sqlite3.connect(CONFIG.db_path) as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS decisions (
-                host TEXT PRIMARY KEY,
-                decision TEXT,
-                root TEXT,
-                timestamp TEXT
-            )
-        """)
-        conn.commit()
-
-    logging.warning(f"===> Reloaded CertGuard Addon")
-
-class ErrorLevel(Enum):
-    NONE   = 0
-    INFO   = 1
-    NOTICE = 2
-    WARN   = 3
-    ERROR  = 4
-    CRIT   = 5
-    FATAL  = 6
-    
-PAGE_COLOR = {
-    ErrorLevel.INFO:   'Green',
-    ErrorLevel.NOTICE: 'Blue', 
-    ErrorLevel.WARN:   'Yellow', 
-    ErrorLevel.ERROR:  'Orange', 
-    ErrorLevel.CRIT:   'Red', 
-    ErrorLevel.FATAL:  'Maroon',
-}
 
 def verify_signature(subject: x509.Certificate, issuer: x509.Certificate):
     #Cryptographically verify that `issuer` signed `subject`.
@@ -762,7 +724,7 @@ def request(flow: http.HTTPFlow) -> None:
     else:
         logging.fatal(f'FATAL: Could not validate trust anchor root ({claimed_root}) for cert chain!')
         violation = f'⛔ Could not validate cert against claimed root of:<br>&nbsp&nbsp&nbsp&nbsp<b>{claimed_root}</b>'
-        error_screen(flow, None, PAGE_COLOR[ErrorLevel.CRIT], [violation], ErrorLevel.CRIT.value)
+        error_screen(flow, None, ErrorLevel.CRIT.color, [violation], ErrorLevel.CRIT.value)
         return
     
     # Check to see if hostname is already approved in the database.
@@ -834,7 +796,7 @@ def request(flow: http.HTTPFlow) -> None:
         error, violation = check(flow, root_cert)
         if error.value > highest_error_level:
             highest_error_level = error.value
-            blockpage_color = PAGE_COLOR[error]
+            blockpage_color = error.color
         violations.append(violation)
 
     logging.info(f'-----------------------------------END verification for {host}--------------------------------------------')

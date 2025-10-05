@@ -58,7 +58,7 @@ blocklist = ['CN','IR','KP','RU']
 # Restricted roots will raise a Level-5 browser warning that users can click through.
 # Prohibited roots will raise a Level-6 error that cannot be bypassed.
 #restricted_roots = []
-restricted_roots = ['VeriSign, Inc.', 'DigiCert Global Root G2']                          # For testing purposes 
+restricted_roots = ['VeriSign, Inc.'] #, 'DigiCert Global Root G2']   # For testing purposes 
 prohibited_roots = ['Fina Root CA', 'Financijska agencija']
 
 

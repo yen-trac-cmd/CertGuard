@@ -1,5 +1,5 @@
 from ca_org_mapping import ca_org_to_caa
-from collections import deque
+from CertGuardConfig import CertGuardConfig
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
@@ -13,68 +13,14 @@ from mitmproxy import ctx, http
 from urllib.parse import urlparse
 import certifi
 import dns.resolver
-import json
-import ipaddress
 import logging                          # Valid levels = debug, info, warning, error, critical, fatal.  
 import os
 import sqlite3
 import sys
-import tomllib
 import uuid
 import verify_SCTs
 
-with open("config.toml", "rb") as f:
-    config = tomllib.load(f)
-logging_level     = config["general"]["logging_level"].lower()              # "debug", "info", "warn", "error", or "alert"
-user_resolvers    = config["general"]["resolvers"]
-dns_timeout       = config["general"]["dns_timeout"]
-db_path           = config["general"]["db_path"]
-intercept_mode    = config["general"]["intercept_mode"].lower()             # "compatible" or "strict"
-token_mode        = config["general"]["token_mode"].lower()                 # "header", "get", or "post"
-exempt_eTLDs      = config["caa_exceptions"]["exempt_eTLDs"]
-filtering_mode    = config["country_filtering"]["filtering_mode"].lower()   # "allow" or "warn"
-restricted_roots  = config["controlled_roots"]["restricted_roots"]
-prohibited_roots  = config["controlled_roots"]["prohibited_roots"]
-verify_signatures = config["sct_config"]["verify_signatures"]
-country_list      = [country.upper() for country in config["country_filtering"]["country_list"]]
-blocklist         = [country.upper() for country in config["country_filtering"]["blocklist"]]
-
-# Handle optional config parameters:
-try: 
-    custom_roots_dir = config["general"]["custom_roots_dir"]
-except:
-    custom_roots_dir = None
-try:
-    min_tls_version  = config["tls_config"]["min_tls_version"]
-except:
-    min_tls_version  = 1.2
-try:
-    ciphersuites     = config["tls_config"]["ciphersuites"].upper()
-except:
-    ciphersuites     = None
-
-resolver = dns.resolver.Resolver()
-for ip in user_resolvers:
-    try:
-        ipaddress.ip_address(ip)
-    except ValueError:
-        logging.fatal(f"Invalid DNS resolver entry in config.toml: {ip}")
-resolvers = deque(user_resolvers)
-
-with open('iso-3166-alpha2_list.json') as iso_countries:
-    iso_country_map = json.load(iso_countries)
-
-public_suffix_list = []
-# TODO: Add a check to fetch new 'public_suffix_list.dat' from https://publicsuffix.org/list/public_suffix_list.dat if local copy is >5 days old.
-#       Can reuse code from verify_SCTs.load_ct_log_list()
-try:
-    with open('public_suffix_list.dat', 'r', encoding='utf-8') as psl:
-        for line in psl:
-            if not line.strip().startswith('//') and line.strip():
-                public_suffix_list.append(line.strip())
-except FileNotFoundError:
-    logging.fatal(f"FATAL Error: Cannot locate public_suffix_list.dat in the current directory!")
-
+CONFIG = CertGuardConfig()
 
 def get_root_store():
     # Load trusted roots from certifi
@@ -90,18 +36,16 @@ def get_root_store():
         logging.debug(f'Loaded {base_count} certificates from {certifi.where()}.')
 
     # Load custom root CA certs
-    if custom_roots_dir == None:
-        pass
-    else:
+    if CONFIG.custom_roots_dir != None:
         from glob import glob
-        if os.path.isdir(custom_roots_dir):
-            pem_files = glob(os.path.join(custom_roots_dir, '*.pem'))
-            logging.info(f'Loading {len(pem_files)} custom root files from {custom_roots_dir}.')
+        if os.path.isdir(CONFIG.custom_roots_dir):
+            pem_files = glob(os.path.join(CONFIG.custom_roots_dir, '*.pem'))
+            logging.info(f'Loading {len(pem_files)} custom root files from {CONFIG.custom_roots_dir}.')
             for file in pem_files:
                 with open(file, "rb") as f:
                     root_bundle += f.read()
         else:
-            logging.fatal(f"Could not find directory specified for 'custom_roots_dir': {custom_roots_dir}.")
+            logging.fatal(f"Could not find directory specified for 'custom_roots_dir': {CONFIG.custom_roots_dir}.")
             logging.fatal(f"Please check configuration in config.toml file or create/populate custom roots directory.")
 
     roots = []
@@ -118,39 +62,39 @@ def get_root_store():
     return roots
 
 def load(loader):
-    if logging_level in ["debug", "info", "warn", "error", "alert"]:
+    if CONFIG.logging_level in ["debug", "info", "warn", "error", "alert"]:
         opts = ctx.options.keys()
         if "console_eventlog_verbosity" in opts:
             # Running in mitmproxy console UI
             ctx.log.info("Detected mitmproxy console UI")
-            ctx.options.console_eventlog_verbosity = logging_level
+            ctx.options.console_eventlog_verbosity = CONFIG.logging_level
         else:
             # Running in mitmdump (or mitmweb)
             ctx.log.info("Detected mitmdump/mitmweb")
-            ctx.options.termlog_verbosity = logging_level
+            ctx.options.termlog_verbosity = CONFIG.logging_level
     else:
         logging.warning(f"Invalid console logging mode defined in config.toml; defaulting to 'info' level.")
     
-    if type(dns_timeout) != float:
+    if type(CONFIG.dns_timeout) != float:
         logging.fatal(f"dns_timeout in config.toml must be configured as floating point value!")
 
-    if filtering_mode not in ['allow', 'warn']:
+    if CONFIG.filtering_mode not in ['allow', 'warn']:
         logging.fatal(f"Invalid country filtering mode defined in config.toml!")
 
-    if intercept_mode not in ['compatible', 'strict']:
+    if CONFIG.intercept_mode not in ['compatible', 'strict']:
         logging.fatal(f"Invalid 'intercept_mode' defined in config.toml!")
 
-    if token_mode not in ['header', 'post', 'get']:
+    if CONFIG.token_mode not in ['header', 'post', 'get']:
         logging.fatal(f"Invalid 'token_mode' defined in config.toml!")
 
-    for entries in [country_list, blocklist]:
+    for entries in [CONFIG.country_list, CONFIG.blocklist]:
         if not all(isinstance(country, str) and len(country) == 2 for country in entries):
             raise AssertionError("All countries in config.toml must be specified as 2-character iso-3166-alpha2 codes!")
         
-        unrecognized = [entry for entry in entries if entry not in iso_country_map]
+        unrecognized = [entry for entry in entries if entry not in CONFIG.iso_country_map]
         assert not unrecognized, f"Unrecognized country specified in config.toml: {unrecognized}!"
 
-    match min_tls_version:
+    match CONFIG.min_tls_version:
         case 1.0:
             ctx.options.tls_version_server_min = "TLS1"
         case 1.1:
@@ -163,19 +107,17 @@ def load(loader):
             ctx.options.tls_version_server_min = "TLS1_2"
     logging.debug(f'Minimum TLS version for upstream connection set to {ctx.options.tls_version_server_min}.')
 
-    if ciphersuites == None:
-        pass
-    else:
+    if CONFIG.ciphersuites != None:
         supported_ciphers = supported_ciphers_list()
         target_ciphers = []
-        for cipher in ciphersuites.split(':'):
+        for cipher in CONFIG.ciphersuites.split(':'):
             if cipher in supported_ciphers:
                 target_ciphers.append(cipher)
         ctx.options.ciphers_server = ":".join(target_ciphers)
         logging.debug(f'Configured ciphers: \n* {"\n* ".join(target_ciphers)}')
 
     # Create SQLite DB and table if not exists
-    with sqlite3.connect(db_path) as conn:
+    with sqlite3.connect(CONFIG.db_path) as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS decisions (
                 host TEXT PRIMARY KEY,
@@ -262,24 +204,29 @@ def get_cdp(cert):
         crl_dp_extension = cert.extensions.get_extension_for_class(
             x509.CRLDistributionPoints
         )
-        crl_value=crl_dp_extension.value
-
-        for distribution_point in crl_value:
-            if distribution_point.full_name:
-                for general_name in distribution_point.full_name:
-                    if isinstance(general_name, x509.UniformResourceIdentifier):
-                        crl_urls.append(general_name.value)
-
     except x509.ExtensionNotFound:
         logging.warning(f'No CRL Distribution Point found in cert!')
-        return []
-    
+        return crl_urls
+
+    crl_value=crl_dp_extension.value
+    for distribution_point in crl_value:
+        if not distribution_point.full_name:
+            continue
+        for general_name in distribution_point.full_name:
+            if isinstance(general_name, x509.UniformResourceIdentifier):
+                crl_urls.append(general_name.value)   
     return crl_urls
 
 def get_root_cert(chain, root_store):
-    # Given an HTTPS mitmproxy flow, attempt to resolve and verify the root CA certificate for the server's certificate chain.
-    # Returns root_cert object (cryptography.x509.Certificate) or None if not found/verified
+    """
+    Given an HTTPS mitmproxy flow, attempt to resolve and verify the root CA certificate for the server's certificate chain.
 
+    Args:
+        chain: list of mitmproxy Cert objects
+        root_store: list of cryptography.x509.Certificate objects
+    Returns:
+        tuple (root_cert, claimed_root)
+    """
     # Convert mitmproxy Cert object to cryptography.x509.Certificate
     server_chain = [cert_to_x509(cert) for cert in chain]
     
@@ -349,14 +296,14 @@ def root_country_check(flow, root):
         root_country=root_country[0].value
         logging.info(f"Country attribute for root:      {root_country} ")
 
-        if root_country in blocklist:
-            violation = f"⛔ Root CA is located in a <b style='color:red;'>blocklisted</b> country: <b>{iso_country_map[root_country]}</b>"
-            logging.error(f'Root CA for {flow.request.pretty_url} is located in a blocklisted country: {iso_country_map[root_country]}')
+        if root_country in CONFIG.blocklist:
+            violation = f"⛔ Root CA is located in a <b style='color:red;'>blocklisted</b> country: <b>{CONFIG.iso_country_map[root_country]}</b>"
+            logging.error(f'Root CA for {flow.request.pretty_url} is located in a blocklisted country: {CONFIG.iso_country_map[root_country]}')
             return ErrorLevel.FATAL, violation
 
-        if (filtering_mode == 'allow' and root_country not in country_list) or (filtering_mode == 'warn' and root_country in country_list):
-            violation = f"⚠️ Root CA is located in <strong>{iso_country_map[root_country]}</strong>."
-            logging.warning(f'Root CA is located in: {iso_country_map[root_country]}')
+        if (CONFIG.filtering_mode == 'allow' and root_country not in CONFIG.country_list) or (CONFIG.filtering_mode == 'warn' and root_country in CONFIG.country_list):
+            violation = f"⚠️ Root CA is located in <strong>{CONFIG.iso_country_map[root_country]}</strong>."
+            logging.warning(f'Root CA is located in: {CONFIG.iso_country_map[root_country]}')
             return ErrorLevel.CRIT, violation
             
     return ErrorLevel.NONE, None
@@ -376,8 +323,8 @@ def controlled_CA_checks(flow, root):
     root_dn = root.subject.rfc4514_string()
     logging.debug(f"Root DN value:                   {root_dn}")
     
-    prohibited_value = set(identifiers) & set(prohibited_roots)
-    restricted_value = set(identifiers) & set(restricted_roots)
+    prohibited_value = set(identifiers) & set(CONFIG.prohibited_roots)
+    restricted_value = set(identifiers) & set(CONFIG.restricted_roots)
     
     if prohibited_value:
         violation = f"⛔ Prohibited Root CA detected: <b>{list(prohibited_value)[0]}</b>"
@@ -520,7 +467,7 @@ def check_caa_per_domain(domain: str, ca_identifiers: list[str]) -> bool:
         
         # Check to see if comparing against an "effective TLD" / public suffix, with exceptions as defined in config.toml.
         # See https://developer.mozilla.org/en-US/docs/Glossary/eTLD and https://publicsuffix.org/ for reference
-        if check_domain in public_suffix_list and not check_domain in exempt_eTLDs: etld = True 
+        if check_domain in CONFIG.public_suffix_list and not check_domain in CONFIG.exempt_eTLDs: etld = True 
         #if len(check_domain.split("."))==1: etld = True   # Initial simplistic check that only accounted for true single-label TLDs.
 
         ############################################################################################ this needs to move out once I figure out right structure
@@ -530,19 +477,19 @@ def check_caa_per_domain(domain: str, ca_identifiers: list[str]) -> bool:
         #if domain_signed:
         #    logging.warning(f'True or fasle: {domain_signed}')
         try:
-            current_resolver = resolvers[0]
+            current_resolver = CONFIG.resolvers[0]
             logging.debug(f'   Using resolver: {current_resolver}')
 
             query = dns.message.make_query(check_domain, dns.rdatatype.CAA, want_dnssec=True)
             got_response=False
             while got_response==False:
                 try:
-                    answers = dns.query.udp_with_fallback(query, current_resolver, timeout=dns_timeout)  # timeout parameter is required, otherwise mitmproxy can freeze
+                    answers = dns.query.udp_with_fallback(query, current_resolver, timeout=CONFIG.dns_timeout)  # timeout parameter is required, otherwise mitmproxy can freeze
                     got_response=True
                 except dns.exception.Timeout as e:
-                    resolvers.rotate(1)
-                    current_resolver = resolvers[0]
-                    logging.error(f'DNS query using resolver {resolvers[-1]} for "{check_domain}" timed out!!  ...Trying again with resolver {current_resolver}.')
+                    CONFIG.resolvers.rotate(1)
+                    current_resolver = CONFIG.resolvers[0]
+                    logging.error(f'DNS query using resolver {CONFIG.resolvers[-1]} for "{check_domain}" timed out!!  ...Trying again with resolver {current_resolver}.')
             
             if answers[1]:
                 logging.warning(f'DNS query had to fallback to TCP due to truncated response')
@@ -635,7 +582,7 @@ def prior_approval_check(flow, root_cert, quick_check=False):
     root_fingerprint = root_cert.fingerprint(hashes.SHA256()).hex()
     
     ############ Need to extend this to examine root cert parameters!!!!!!!!!!
-    with sqlite3.connect(db_path) as conn:
+    with sqlite3.connect(CONFIG.db_path) as conn:
         row = conn.execute("SELECT decision, root FROM decisions WHERE host = ?", (host,)).fetchone()               
         
         if quick_check == True:
@@ -659,7 +606,7 @@ def prior_approval_check(flow, root_cert, quick_check=False):
 
 def record_decision(host, decision, root_fingerprint):
     now = datetime.now(timezone.utc).isoformat()
-    with sqlite3.connect(db_path) as conn:
+    with sqlite3.connect(CONFIG.db_path) as conn:
         conn.execute("REPLACE INTO decisions (host, decision, root, timestamp) VALUES (?, ?, ?, ?)", (host, decision, root_fingerprint, now))
         conn.commit()
     #global approved_hosts
@@ -728,7 +675,7 @@ def sct_check(flow, root):
             logging.debug(f"  {k}: {v}")
         
         # Validate SCT digital signatures (if enabled)
-        if verify_signatures:
+        if CONFIG.verify_signatures:
             validated = verify_SCTs.validate_signature(cert, issuer_cert, sct, i)
             if not validated:
                 violations.append(f'⛔ Digital signature validation for <a href=https://certificate.transparency.dev/howctworks/ target="_blank">SCT</a> #{i} failed!')
@@ -828,20 +775,20 @@ def request(flow: http.HTTPFlow) -> None:
         logging.info(f'Host {flow.request.pretty_host} not found to be previously approved; continuing checks.')
 
     # Detect approval token from client request
-    if token_mode == "get":
+    if CONFIG.token_mode == "get":
         token = flow.request.query.get(BYPASS_PARAM)
         logging.info(f"Detected token in request:       {token}.")
-    elif token_mode == "post":
+    elif CONFIG.token_mode == "post":
         token = flow.request.urlencoded_form.get(BYPASS_PARAM)
         logging.info(f"Detected token in request:       {token}.")
-    elif token_mode == "header":
+    elif CONFIG.token_mode == "header":
         token = flow.request.headers.get(f"X-{BYPASS_PARAM}")
         logging.info(f"Detected token in request:       {token}.")
 
     if token and token in pending_requests:
         orig_req = pending_requests.pop(token)
-        if token_mode == "header":
-            if intercept_mode == "strict":                       
+        if CONFIG.token_mode == "header":
+            if CONFIG.intercept_mode == "strict":                       
                 # Best effort to replay original request; works for simple HTML form POST requests that return 302 or HTML.
                 flow.request.method = orig_req["method"]
                 flow.request.path = orig_req["path"]
@@ -851,11 +798,11 @@ def request(flow: http.HTTPFlow) -> None:
             else:
                 # Synthetic response to close POST request; JavaScript handles page refresh.
                 flow.response = http.Response.make(200, f"CertGuard: '{host}' added as approved host via token {token}.", {"Content-Type": "text/plain"})
-        elif token_mode == "post":
+        elif CONFIG.token_mode == "post":
             flow.request.method = orig_req["method"]
             flow.request.path = orig_req["path"]
             flow.request.content = orig_req["body"]
-        elif token_mode == "get":
+        elif CONFIG.token_mode == "get":
             flow.request.query.pop(BYPASS_PARAM, None)              # Remove CertGuard parameter before redirect.
             flow.response = http.Response.make(302, b"", {"Location": flow.request.url})
 
@@ -864,7 +811,7 @@ def request(flow: http.HTTPFlow) -> None:
         approved_hosts.add(host)
         return
 
-    if intercept_mode == "compatible":
+    if CONFIG.intercept_mode == "compatible":
         if is_main_page:
             logging.info(f'Main page navigation; proceeding for further analysis...')
             pass

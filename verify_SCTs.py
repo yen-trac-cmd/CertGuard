@@ -56,72 +56,75 @@ class RevocationReason(IntEnum):
     def _missing_(cls, value: int):
         return cls.unknown
 
+def fetch_and_cache(url, cache_file):
+    resp = requests.get(url, timeout=3)
+    resp.raise_for_status()
+    with open(cache_file, 'wb') as f:
+        f.write(resp.content)
+    logging.info(f"Fetched & loaded CT log list from {url}; cached under {cache_file}.")
+    return resp.json()
 
-def load_ct_log_list():
-    # Load Chrome's CT log list, refreshing if needed, and map raw log_id bytes to metadata mapping.
+def get_ct_log_list():
+    """
+    Loads the CT log list from cache or fetches a fresh copy if missing or stale.
+    Returns the loaded log_list JSON object.
+    """
+    if not os.path.exists(LOG_LIST):
+        logging.info(f"{LOG_LIST} missing; fetching current copy from {CT_LOG_LIST_URL}.")
+        log_list = fetch_and_cache(CT_LOG_LIST_URL, LOG_LIST)
+    else:
+        last_modified = datetime.datetime.fromtimestamp(os.path.getmtime(LOG_LIST))
+        age_days = (datetime.datetime.now() - last_modified).days
+        size = os.path.getsize(LOG_LIST)
 
-    def fetch_and_cache():
-        resp = requests.get(CT_LOG_LIST_URL, timeout=10)
-        resp.raise_for_status()
-        with open(LOG_LIST, 'wb') as f:
-            f.write(resp.content)
-        logging.info(f"Fetched & loaded CT log list from {CT_LOG_LIST_URL}; cached under {LOG_LIST}.")
-        return resp.json()
-
-    try:
-        if not os.path.exists(LOG_LIST):
-            logging.info(f"{LOG_LIST} missing; fetching current copy from {CT_LOG_LIST_URL}.")
-            log_list = fetch_and_cache()
-        else:
-            last_modified = datetime.datetime.fromtimestamp(os.path.getmtime(LOG_LIST))
-            age_days = (datetime.datetime.now() - last_modified).days
-            size = os.path.getsize(LOG_LIST)
-
-            if age_days > 0 or size == 0:
-                logging.info(f"{LOG_LIST} is stale (age={age_days}d, size={size} bytes); refreshing with latest authoritative copy from {CT_LOG_LIST_URL}.")
-                try:
-                    log_list = fetch_and_cache()
-                except Exception as e:
-                    logging.error(f"Failed to refresh Certificate Transparency log list from {CT_LOG_LIST_URL}: {e}; using cached copy.")
-                    with open(LOG_LIST, 'rb') as f:
-                        log_list = json.load(f)
-            else:
+        if age_days > 0 or size == 0:
+            logging.info(f"{LOG_LIST} is stale (age={age_days}d, size={size} bytes); refreshing with latest authoritative copy from {CT_LOG_LIST_URL}.")
+            try:
+                log_list = fetch_and_cache(CT_LOG_LIST_URL, LOG_LIST)
+            except Exception as e:
+                logging.error(f"Failed to refresh Certificate Transparency log list from {CT_LOG_LIST_URL}: {e}; using cached copy.")
                 with open(LOG_LIST, 'rb') as f:
                     log_list = json.load(f)
-                logging.info(f"Successfully loaded cached Google Certificate Transparency log list from {LOG_LIST}.")
+        else:
+            with open(LOG_LIST, 'rb') as f:
+                log_list = json.load(f)
+            logging.info(f"Successfully loaded cached Google Certificate Transparency log list from {LOG_LIST}.")
+    return log_list
 
-        # Transform log_list mapping
-        mapping = {}
-        for operator in log_list.get("operators", []):
-            for entry in operator.get("logs", []):
-                key_b64 = entry.get("key")
-                log_id_b64 = entry.get("log_id")
-                if not key_b64 or not log_id_b64:
-                    continue
+def load_ct_log_list():
+    """
+    Loads the CT log list and transforms it into a mapping of log_id_bytes to log entry metadata.
+    """
+    log_list = get_ct_log_list()
 
-                try:
-                    # Remove whitespace/newlines
-                    key_b64 = "".join(key_b64.split())
-                    log_id_b64 = "".join(log_id_b64.split())
+    # Transform log_list mapping
+    mapping = {}
+    for operator in log_list.get("operators", []):
+        for entry in operator.get("logs", []):
+            key_b64 = entry.get("key")
+            log_id_b64 = entry.get("log_id")
+            if not key_b64 or not log_id_b64:
+                continue
 
-                    pubkey_der = base64.b64decode(key_b64)
-                    log_id_bytes = base64.b64decode(log_id_b64)
+            try:
+                # Remove whitespace/newlines
+                key_b64 = "".join(key_b64.split())
+                log_id_b64 = "".join(log_id_b64.split())
 
-                    pubkey = serialization.load_der_public_key(pubkey_der, backend=default_backend())
-                    entry["pubkey"] = pubkey
-                    entry["operator_name"] = operator.get("name")
+                pubkey_der = base64.b64decode(key_b64)
+                log_id_bytes = base64.b64decode(log_id_b64)
 
-                    mapping[log_id_bytes] = entry
+                pubkey = serialization.load_der_public_key(pubkey_der, backend=default_backend())
+                entry["pubkey"] = pubkey
+                entry["operator_name"] = operator.get("name")
 
-                except Exception as e:
-                    logging.error(f"Failed to load log public key; exception: {e}")
-                    continue
+                mapping[log_id_bytes] = entry
 
-        return mapping
+            except Exception as e:
+                logging.error(f"Failed to load log public key; exception: {e}")
+                continue
 
-    except Exception as e:
-        logging.fatal(f"Error encountered loading CT log list: {e}")
-        return None
+    return mapping
 
 def extract_scts(flow, cert: str, ct_log_map):
     logging.warning(f"-----------------------------------Entering extract_scts()--------------------------------------------------")

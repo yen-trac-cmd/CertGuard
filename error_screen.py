@@ -18,20 +18,20 @@ def append_query_param(url, key, value):
     return urlunparse(parsed._replace(query=new_query))
 
 def error_screen(flow, token, color, violations, error_level):
-    from CertGuard import ErrorLevel, BYPASS_PARAM, token_mode
+    from CertGuard import ErrorLevel, BYPASS_PARAM, CONFIG
 
     scheme = color_schemes.get(color, {"bg": "#f0f0f0", "errorlevel_color": "#666"})
     bg, errorlevel_color = scheme["bg"], scheme["errorlevel_color"]
 
     if error_level < ErrorLevel.FATAL.value:
-        if token_mode == 'get':
+        if CONFIG.token_mode == 'get':
             bypass_url = append_query_param(flow.request.pretty_url, BYPASS_PARAM, token)
             prompt= f"""
                 <p>Are you sure you want to proceed?</p>
                 <a href="{bypass_url}" class="btn">Proceed Anyway</a>
                 """
         
-        elif token_mode == 'post':
+        elif CONFIG.token_mode == 'post':
             prompt = f"""
                 <p>Are you sure you want to proceed?</p>
                 <form method="POST" action="{flow.request.pretty_url}">
@@ -40,7 +40,7 @@ def error_screen(flow, token, color, violations, error_level):
                 </form>
             """
         
-        elif token_mode == 'header':
+        elif CONFIG.token_mode == 'header':
             prompt = f"""
                 <p>Are you sure you want to proceed?</p>
                 <button id="approve-btn">Proceed Anyway</button>
@@ -83,7 +83,7 @@ def error_screen(flow, token, color, violations, error_level):
             a.std        {{}}
             a.btn        {{ display:inline-block; padding:10px 15px; background:{errorlevel_color}; color:white; text-decoration:none; border-radius:4px; cursor:pointer; }}              
           </style>
-          {javascript if token_mode == 'header' and error_level < ErrorLevel.FATAL.value else ""}
+          {javascript if CONFIG.token_mode == 'header' and error_level < ErrorLevel.FATAL.value else ""}
           </head>
           <body>
             <div class="warning-box">

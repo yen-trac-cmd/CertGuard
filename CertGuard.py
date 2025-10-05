@@ -48,7 +48,6 @@ try:
     min_tls_version  = config["tls_config"]["min_tls_version"]
 except:
     min_tls_version  = 1.2
-
 try:
     ciphersuites     = config["tls_config"]["ciphersuites"].upper()
 except:
@@ -68,10 +67,14 @@ with open('iso-3166-alpha2_list.json') as iso_countries:
 public_suffix_list = []
 # TODO: Add a check to fetch new 'public_suffix_list.dat' from https://publicsuffix.org/list/public_suffix_list.dat if local copy is >5 days old.
 #       Can reuse code from verify_SCTs.load_ct_log_list()
-with open('public_suffix_list.dat', 'r', encoding='utf-8') as psl:
-    for line in psl:
-        if not line.strip().startswith('//') and line.strip():
-            public_suffix_list.append(line.strip())
+try:
+    with open('public_suffix_list.dat', 'r', encoding='utf-8') as psl:
+        for line in psl:
+            if not line.strip().startswith('//') and line.strip():
+                public_suffix_list.append(line.strip())
+except FileNotFoundError:
+    logging.fatal(f"FATAL Error: Cannot locate public_suffix_list.dat in the current directory!")
+
 
 def get_root_store():
     # Load trusted roots from certifi

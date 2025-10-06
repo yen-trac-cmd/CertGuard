@@ -5,7 +5,7 @@ from mitmproxy import certs
 def supported_ciphers_list():
     # Read in https://testssl.sh/3.2/etc/cipher-mapping.txt and return list of both OpenSSL and IANA ciphersuite names.
     ciphers=[]
-    with open('./cipher-mapping.txt', 'r') as f:
+    with open('./resources/cipher-mapping.txt', 'r') as f:
         ciphers = [cipher_name for line in f for cipher_name in line.split()[2:4]]
     return ciphers
 

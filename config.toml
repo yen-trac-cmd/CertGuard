@@ -30,7 +30,7 @@ intercept_mode = "compatible"
 #                Also avoids tokens from being captured in proxy logs, browser history, or bookmarks.
 #  2. "post"   - Similar benefits as 'header' method; uses a basic form POST and does not require JavaScript.
 #  3. "get"    - Injects the CertGuard token as a URL query parameter visible to the end user, but does not require JavaScript.
-token_mode = "get"
+token_mode = "header"
 
 
 [country_filtering]

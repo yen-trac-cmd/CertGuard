@@ -20,6 +20,7 @@ import uuid
 import verify_SCTs
 
 CONFIG = Config()
+BYPASS_PARAM = "CertGuard-Token"
 
 def load(loader):
     if CONFIG.logging_level in ["debug", "info", "warn", "error", "alert"]:
@@ -424,20 +425,12 @@ def check_caa_per_domain(domain: str, ca_identifiers: list[str]) -> bool:
     etld = False 
     for i in range(len(labels)):  # Climb the DNS tree checking for applicable CAA record(s), warn if only found at TLD level.
         check_domain = ".".join(labels[i:])
-        #logging.info(f' Check being performed against domain: {check_domain}')
         logging.warning(f' Checking for DNS CAA records published at {check_domain} against enumerated CA identifiers: {ca_identifiers}')
         
         # Check to see if comparing against an "effective TLD" / public suffix, with exceptions as defined in config.toml.
         # See https://developer.mozilla.org/en-US/docs/Glossary/eTLD and https://publicsuffix.org/ for reference
         if check_domain in CONFIG.public_suffix_list and not check_domain in CONFIG.exempt_eTLDs: etld = True 
-        #if len(check_domain.split("."))==1: etld = True   # Initial simplistic check that only accounted for true single-label TLDs.
 
-        ############################################################################################ this needs to move out once I figure out right structure
-        #domain_signed = is_zone_signed(check_domain)
-        #logging.warning(f'DNS zone signed? {domain_signed}')
-
-        #if domain_signed:
-        #    logging.warning(f'True or fasle: {domain_signed}')
         try:
             current_resolver = CONFIG.resolvers[0]
             logging.debug(f'   Using resolver: {current_resolver}')
@@ -460,7 +453,6 @@ def check_caa_per_domain(domain: str, ca_identifiers: list[str]) -> bool:
             #logging.info(f'DNS Response flags: {answers.flags}')
             logging.debug(f'Full resource record set: {answers}')
            
-            #if domain_signed:
             if answers.flags & dns.flags.AD:   # Indicates a DNSSEC-validated resposne; dns.flags.AD = 32
                 logging.info(f'DNSSEEC validation successful (AD bit set in response).')
             else:
@@ -675,10 +667,10 @@ def sct_check(flow, root):
 
 #====================================================================== Main control logic===================================================================
 
-BYPASS_PARAM = "CertGuard-Token"
 approved_hosts = set()
 pending_requests = {}
 
+# Load Certifi roots + any custom roots
 root_store = get_root_store()
 
 ct_log_map = verify_SCTs.load_ct_log_list()

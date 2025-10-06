@@ -1,11 +1,13 @@
-from collections import deque
-from enum import Enum
 import dns.resolver
 import json
 import ipaddress
 import logging                          # Valid levels = debug, info, warning, error, critical, fatal.  
 import sys
 import tomllib
+from collections import deque
+from enum import Enum
+from requests_cache import CachedSession, timedelta
+
 
 class ErrorLevel(Enum):
     NONE   = 0
@@ -58,7 +60,7 @@ class Config:
         self.ciphersuites = ciphersuite_val.upper() if ciphersuite_val is not None else None
 
         # ISO country map
-        with open('iso-3166-alpha2_list.json') as iso_countries:
+        with open('./resources/iso-3166-alpha2_list.json') as iso_countries:
             self.iso_country_map = json.load(iso_countries)
 
         # Validate user-supplied config values
@@ -89,16 +91,37 @@ class Config:
                 logging.fatal(f"Invalid DNS resolver entry in config.toml: {ip}")
         self.resolvers = deque(self.user_resolvers)
 
-        # Public Suffix List
-        # TODO: Add a check to fetch new 'public_suffix_list.dat' from https://publicsuffix.org/list/public_suffix_list.dat 
-        # if local copy is >5 days old.  Can reuse code from verify_SCTs.load_ct_log_list()
+        # Load Public Suffix List
+        PSL_URL = 'https://publicsuffix.org/list/public_suffix_list.dat'
         self.public_suffix_list = []
-        try:
-            with open('public_suffix_list.dat', 'r', encoding='utf-8') as psl:
-                for line in psl:
-                    if not line.strip().startswith('//') and line.strip():
-                        self.public_suffix_list.append(line.strip())
-        except FileNotFoundError:
-            logging.info(f"Error: Cannot locate public_suffix_list.dat in the current directory!")
 
+        session = CachedSession('./resources/public_suffix_list.dat', expire_after=timedelta(days=5), stale_if_error=True, backend="filesystem", allowable_codes=[200])
+        logging.info(f'Session cache contains {PSL_URL}? {session.cache.contains(url=PSL_URL)}')
+
+        try:
+            psl_response = session.get(PSL_URL)
+            #psl_response = session.get('https://publicsuffix.org/list/public_suffix_list.datx')   # Bogus URL for fault testing
+            psl_response.raise_for_status()
+            if not psl_response.from_cache:
+                logging.info(f"Fresh Public Suffix List successfully downloaded from {PSL_URL}, Status Code: {psl_response.status_code}")
+
+        except Exception as e:
+            logging.warning(f"Error encountered during fetch: {e}")
+            logging.warning(f"...falling back to cached content. Check connectivity and site availability.")
+            psl_response = session.get(PSL_URL, only_if_cached=True)
+            if psl_response.status_code != 200:
+                logging.fatal(f'Cannot load Public Suffix List from network or local cache; failing closed.')
+                logging.fatal(f'Check network connectivity and site availability to {PSL_URL}')
+                sys.exit()
+
+        if psl_response.from_cache:
+            logging.debug('Public Suffix List retreived from cache.')
+
+        for line in psl_response.text.splitlines():
+            if not line.strip().startswith('//') and line.strip():
+                self.public_suffix_list.append(line.strip())
+        
+        #recombined = "\n".join(self.public_suffix_list)
+        #with open('psl_list.txt', 'w') as f:
+        #    f.write(recombined)
             

@@ -1,13 +1,12 @@
 import base64
 import datetime
 import hashlib
-import json
-import json
 import logging  
 import os
 import requests
+import sys
 import time
-from requests_cache import CachedSession, filesystem
+from requests_cache import CachedSession
 from helper_functions import get_cert_domains
 from cryptography import x509, exceptions
 from cryptography.hazmat.backends import default_backend
@@ -27,7 +26,6 @@ except:
 
 SSLMATE_QUERY_URL = "https://api.certspotter.com/v1/issuances"
 CT_LOG_LIST_URL   = "https://www.gstatic.com/ct/log_list/v3/log_list.json"     # Google's CT Log list
-LOG_LIST          = "./log_list.json"                                          # Locally cached copy of Google CT Log list
 
 class RevocationReason(IntEnum):
     def __new__(cls, value: int, description: str):
@@ -52,62 +50,33 @@ class RevocationReason(IntEnum):
     def _missing_(cls, value: int):
         return cls.unknown
 
-def fetch_and_cache(url, cache_file, desc):
-    resp = requests.get(url, timeout=3)
-    resp.raise_for_status()
-    with open(cache_file, 'wb') as f:
-        f.write(resp.content)
-    logging.info(f"Fetched & loaded {desc} from {url}; cached under {cache_file}.")
-    return resp.json()
-
-'''
-def get_ext_file(local_file, url, file_desc, stale_days):
-    """
-    Loads the requested external file from cache or fetches a fresh copy from the provided URL if missing or stale.
-    Returns the raw file.
-    """
-    if not os.path.exists(local_file):
-        logging.info(f"{local_file} missing; fetching current copy from {url}.")
-        try:
-            file = fetch_and_cache(url, local_file, file_desc)
-        except Exception as e:
-            logging.fatal(f'Cannot retrieve {file_desc} dependency file from {url}!')        
-
-    last_modified = datetime.datetime.fromtimestamp(os.path.getmtime(local_file))
-    age_days = (datetime.datetime.now() - last_modified).days
-    size = os.path.getsize(local_file)
-
-    if age_days > stale_days or size == 0:
-        logging.info(f"{local_file} is stale (age={age_days}d, size={size} bytes); refreshing with latest authoritative copy from {url}.")
-        try:
-            file = fetch_and_cache(url, local_file, file_desc)
-        except Exception as e:
-            logging.error(f"Failed to refresh {file_desc} from {url}: {e}; using cached copy.")
-            with open(local_file, 'rb') as f:
-                file = json.load(f)
-    else:
-        with open(local_file, 'rb') as f:
-            file = json.load(f)
-        logging.info(f"Successfully loaded cached {file_desc} from {local_file}.")
-
-    return file
-'''
-
 def load_ct_log_list():
     """
     Loads the CT log list and transforms it into a mapping of log_id_bytes to log entry metadata.
     """
     
-    session = CachedSession('ct_log_list.json', expire_after=timedelta(hours=24), backend="filesystem")
-    ct_log_list = session.get(CT_LOG_LIST_URL)
+    session = CachedSession('./resources/ct_log_list.json', expire_after=timedelta(hours=24), backend="filesystem", stale_if_error=True, allowable_codes=[200])
+    logging.info(f'Session cache contains {CT_LOG_LIST_URL}? {session.cache.contains(url=CT_LOG_LIST_URL)}')
+    try:
+        ct_log_list = session.get(CT_LOG_LIST_URL)
+        #ct_log_list = session.get('https://www.gstatic.com/ct/log_list/v3/log_list.jsonx')   # Bogus URL for fault testing
+        ct_log_list.raise_for_status()
+        if not ct_log_list.from_cache:
+            logging.info(f"Fresh Certificate Transparency Log List downloaded from {CT_LOG_LIST_URL}, Status Code: {ct_log_list.status_code}")
+
+    except Exception as e:
+        logging.warning(f"Error encountered during fetch: {e}")
+        logging.warning(f"...falling back to cached content. Check connectivity and site availability.")
+        ct_log_list = session.get(CT_LOG_LIST_URL, only_if_cached=True)
+        if ct_log_list.status_code != 200:
+            logging.fatal(f'Cannot load Certificate Transparency Log List from network or local cache; failing closed.')
+            logging.fatal(f'Check network connectivity and site availability to {CT_LOG_LIST_URL}')
+            sys.exit()
 
     if ct_log_list.from_cache:
-        logging.warning('Certificate Transparency log list retreived from cache.')
-    else:
-        logging.warning(f'Fresh Certificate Transparency log list retreived from {CT_LOG_LIST_URL}.')
+        logging.debug('Certificate Transparency log list retreived from cache.')
 
     log_list = ct_log_list.json()
-    #log_list = get_ext_file(LOG_LIST, CT_LOG_LIST_URL, "CT log list", 0)
 
     # Transform log_list mapping
     mapping = {}
@@ -119,7 +88,7 @@ def load_ct_log_list():
                 continue
 
             try:
-                # Remove whitespace/newlines
+                # Remove whitespace/linebreaks
                 key_b64 = "".join(key_b64.split())
                 log_id_b64 = "".join(log_id_b64.split())
 
@@ -214,10 +183,10 @@ def check_ctlog_inclusion(flow, leaf_cert):
     leaf_precert_tbs_sha256 = hashlib.sha256(leaf_cert.tbs_precertificate_bytes).hexdigest()
     
     logging.info(f'Leaf cert SHA256 fingerprint:   {leaf_cert_sha256}')
-    logging.debug(  f'  - tbs_precertificate_bytes:   {base64.b64encode(leaf_cert.tbs_precertificate_bytes).decode()}')
+    logging.debug(f'  - tbs_precertificate_bytes:   {base64.b64encode(leaf_cert.tbs_precertificate_bytes).decode()}')
     logging.info(f'  - Leaf precert TBS SHA256:    {leaf_precert_tbs_sha256} ')
 
-    # TODO - Insert code here to perform local SCT signature verification + inclusion proofing depending on CT validation level configured in config.toml.
+    # TODO - Insert code here to perform inclusion proofing depending on CT validation level configured in config.toml.
 
     # Gets all SANs in cert.  We won't check against all, but this lets us check for wildcard entries.
     cert_domains = get_cert_domains(leaf_cert)    
@@ -274,13 +243,11 @@ def check_ctlog_inclusion(flow, leaf_cert):
             #        Extend the return value to include more verbose description.
             return found, revoked  # False, False
 
+        # SSLMate truncates responses at 100 records per request, so if less than 100 records are returned it indicates the end of the recordset.
+        # ...Otherwise append an "&after=xxxx" query parameter (where xxxx is the last record ID number from the previous recordset) to retrieve the next recordset.
         if len(records) < 100:
             break
         after = records[-1]["id"]
-
-    #if records == False:
-    #    logging.error(f'Unable to query SSLMate for {flow.request.pretty_host}; FAILING CLOSED!')
-    #    return found, revoked  # False, False
     
     if all_records == []:
         logging.error(f'Empty response from SSLMate for {flow.request.pretty_host}')

@@ -1,10 +1,10 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
-ct_log_list.json/
+*.py[codz]
+*$py.class
+
+# CertGuard private content
 custom_roots/
 *.db
 *.log
-*.py[codz]
-*$py.class
-Audit_path_verification.py
-dns-lookup-type.sh
+audit_path_verification.py

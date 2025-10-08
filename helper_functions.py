@@ -15,18 +15,26 @@ def cert_to_x509(cert):
     return x509.load_pem_x509_certificate(pem_bytes, default_backend())
 
 def get_cert_domains(x509_cert: certs.Cert) -> list[str]:
-    # Extract CN and DNS SubAltNames from a mitmproxy.certs.Cert.
+    """
+    Extract CN and DNS SubAltNames from a mitmproxy.certs.Cert.
+
+    Args:
+        x509_cert (mitmproxy.certs.Cert)
+
+    Returns:
+        list: A de-duplicated list of FQDN strings, in lower-case, found in the supplied certificate.
+    """
     domains = set()
 
     # Subject CN
     for attr in x509_cert.subject.get_attributes_for_oid(x509.oid.NameOID.COMMON_NAME):
-        domains.add(attr.value)
+        domains.add(attr.value.lower())
 
     # SANs
     try:
         san_ext = x509_cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
         for name in san_ext.value.get_values_for_type(x509.DNSName):
-            domains.add(name)
+            domains.add(name.lower())
     except x509.ExtensionNotFound:
         pass
 

@@ -1,24 +1,23 @@
 {
-  "created_at": "2025-10-06T22:59:13.444994+00:00",
-  "elapsed": 0.045619,
+  "created_at": "2025-10-08T00:31:55.254153+00:00",
+  "elapsed": 0.091788,
   "encoding": "UTF-8",
-  "expires": "2025-10-07T22:59:13.444967+00:00",
+  "expires": "2025-10-09T00:31:55.254122+00:00",
   "headers": {
     "Accept-Ranges": "bytes",
     "Access-Control-Allow-Origin": "*",
-    "Age": "281",
     "Alt-Svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
     "Cache-Control": "public, max-age=3000",
     "Content-Disposition": "attachment; filename=\"log_list.json\"",
     "Content-Encoding": "br",
-    "Content-Length": "8262",
+    "Content-Length": "8738",
     "Content-Security-Policy": "require-trusted-types-for 'script'; report-uri https://csp.withgoogle.com/csp/cert-log-ninjas",
     "Content-Type": "application/json; charset=UTF-8",
     "Cross-Origin-Opener-Policy": "same-origin; report-to=\"cert-log-ninjas\"",
     "Cross-Origin-Resource-Policy": "cross-origin",
-    "Date": "Mon, 06 Oct 2025 22:54:32 GMT",
-    "Expires": "Mon, 06 Oct 2025 23:44:32 GMT",
-    "Last-Modified": "Mon, 06 Oct 2025 14:56:07 GMT",
+    "Date": "Wed, 08 Oct 2025 00:31:55 GMT",
+    "Expires": "Wed, 08 Oct 2025 01:21:55 GMT",
+    "Last-Modified": "Tue, 07 Oct 2025 14:51:17 GMT",
     "Report-To": "{\"group\":\"cert-log-ninjas\",\"max_age\":2592000,\"endpoints\":[{\"url\":\"https://csp.withgoogle.com/csp/report-to/cert-log-ninjas\"}]}",
     "Server": "sffe",
     "Vary": "Accept-Encoding",
@@ -32,6 +31,7 @@
       "Accept": "*/*",
       "Accept-Encoding": "gzip, deflate, br, zstd",
       "Connection": "keep-alive",
+      "If-Modified-Since": "Mon, 06 Oct 2025 14:56:07 GMT",
       "User-Agent": "python-requests/2.32.3"
     },
     "method": "GET",
@@ -40,8 +40,8 @@
   "status_code": 200,
   "url": "https://www.gstatic.com/ct/log_list/v3/log_list.json",
   "_decoded_content": {
-    "version": "69.19",
-    "log_list_timestamp": "2025-10-06T12:58:37Z",
+    "version": "70.1",
+    "log_list_timestamp": "2025-10-07T12:54:56Z",
     "operators": [
       {
         "name": "Google",
@@ -1067,6 +1067,74 @@
           }
         ],
         "tiled_logs": [
+          {
+            "description": "IPng Networks 'Halloumi2025h2'",
+            "log_id": "+3xjpo0eBq3Qg4ibuNQyHLJFROv2/mlyKRkuOD5ebiM=",
+            "key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEqJxSnCcMhWikCFeWo1RiplGaVEZL5Vn4KEJYZM97Ro5XuTg4h6+n807utfPS7qqpLv5me/ddlpKFGoFfkMBrAQ==",
+            "submission_url": "https://halloumi2025h2.log.ct.ipng.ch/",
+            "monitoring_url": "https://halloumi2025h2.mon.ct.ipng.ch/",
+            "mmd": 60,
+            "state": {
+              "qualified": {
+                "timestamp": "2025-10-07T18:30:00Z"
+              }
+            },
+            "temporal_interval": {
+              "start_inclusive": "2025-07-01T00:00:00Z",
+              "end_exclusive": "2026-01-01T00:00:00Z"
+            }
+          },
+          {
+            "description": "IPng Networks 'Halloumi2026h1'",
+            "log_id": "fz035/iSPY5xZb6w0+q+5yoivkbAy4TEFtTkuYJky8I=",
+            "key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEzdcnGwRjm2ZoA68JFZKfoM4cOPPG2fr0iR72p3XanznOlw57HJ9RlYRNt75gIMIKgB1r0dxY5Jojq1m8uobYjg==",
+            "submission_url": "https://halloumi2026h1.log.ct.ipng.ch/",
+            "monitoring_url": "https://halloumi2026h1.mon.ct.ipng.ch/",
+            "mmd": 60,
+            "state": {
+              "qualified": {
+                "timestamp": "2025-10-07T18:30:00Z"
+              }
+            },
+            "temporal_interval": {
+              "start_inclusive": "2026-01-01T00:00:00Z",
+              "end_exclusive": "2026-07-01T00:00:00Z"
+            }
+          },
+          {
+            "description": "IPng Networks 'Halloumi2027h1'",
+            "log_id": "ROgi/CurDpLu0On61pZkYCd20Bdg4IkFCckjobA/w38=",
+            "key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEw5SUl2yfd5TFSqUGv7A+I5+TpLe+zEccmtWVQakQQtOHYKqH8TbycalFx5xaqE5PU4NEwwnAJ9FWeT/6QaovZw==",
+            "submission_url": "https://halloumi2027h1.log.ct.ipng.ch/",
+            "monitoring_url": "https://halloumi2027h1.mon.ct.ipng.ch/",
+            "mmd": 60,
+            "state": {
+              "qualified": {
+                "timestamp": "2025-10-07T18:30:00Z"
+              }
+            },
+            "temporal_interval": {
+              "start_inclusive": "2027-01-01T00:00:00Z",
+              "end_exclusive": "2027-07-01T00:00:00Z"
+            }
+          },
+          {
+            "description": "IPng Networks 'Halloumi2027h2'",
+            "log_id": "CRV/Yy1Gx/dtlSZUk7wPALOVrF2zorJr+wQ9ukrGOJM=",
+            "key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAErmKbFkPG7QfQUARhbIik8vVbIkXhK+YMB6TvLZkyhnzv7wedn+l7VChqovZHKOQXmZEd4B+3ljovIpQz2HmyHA==",
+            "submission_url": "https://halloumi2027h2.log.ct.ipng.ch/",
+            "monitoring_url": "https://halloumi2027h2.mon.ct.ipng.ch/",
+            "mmd": 60,
+            "state": {
+              "qualified": {
+                "timestamp": "2025-10-07T18:30:00Z"
+              }
+            },
+            "temporal_interval": {
+              "start_inclusive": "2027-07-01T00:00:00Z",
+              "end_exclusive": "2028-01-01T00:00:00Z"
+            }
+          },
           {
             "description": "IPng Networks 'Gouda2025h2'",
             "log_id": "GoudanQ8ze1gH3O9MJcIHbyuxKYTnJKwtUDDE3sg7AU=",

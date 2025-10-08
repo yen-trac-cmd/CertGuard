@@ -17,6 +17,7 @@ from cryptography.x509.oid import ExtensionOID
 from datetime import timedelta
 from enum import IntEnum
 from mitmproxy import http
+from typing import Optional, Tuple
 
 # Fetch SSLMate API key from environment variable.  TODO: Migrate to proper key vault.
 try:
@@ -50,9 +51,9 @@ class RevocationReason(IntEnum):
     def _missing_(cls, value: int):
         return cls.unknown
 
-def load_ct_log_list():
+def load_ct_log_list() -> dict:
     """
-    Loads the CT log list and transforms it into a mapping of log_id_bytes to log entry metadata.
+    Loads the CT log list and transforms it into a dictionary of CT log entry metadata, keyed by log_id_bytes.
     """
     
     session = CachedSession('./resources/ct_log_list.json', expire_after=timedelta(hours=24), backend="filesystem", stale_if_error=True, allowable_codes=[200])
@@ -88,7 +89,7 @@ def load_ct_log_list():
                 continue
 
             try:
-                # Remove whitespace/linebreaks
+                # Remove whitespace/linebreaks and extend 'entry' to include log operator name and public key in DER format.
                 key_b64 = "".join(key_b64.split())
                 log_id_b64 = "".join(log_id_b64.split())
 
@@ -99,6 +100,7 @@ def load_ct_log_list():
                 entry["pubkey"] = pubkey
                 entry["operator_name"] = operator.get("name")
 
+                # Return 'mapping' dictionary, keyed by the base64-decoded bytes of the original 'log_id' value for the CT Log.
                 mapping[log_id_bytes] = entry
 
             except Exception as e:
@@ -107,7 +109,7 @@ def load_ct_log_list():
 
     return mapping
 
-def extract_scts(flow, cert: str, ct_log_map):
+def extract_scts(flow: http.HTTPFlow, cert: x509.Certificate, ct_log_map) -> list[dict]:
     logging.warning(f"-----------------------------------Entering extract_scts()--------------------------------------------------")
     # LIMITATION: The code only extracts SCTs embedded inside X.509 certs. Additional extraction logic is 
     # necessary to account for SCTs delivered via OCSP stapling or TLS extension during session negotiation.  
@@ -153,7 +155,7 @@ def extract_scts(flow, cert: str, ct_log_map):
         })
     return sct_data
 
-def validate_signature(cert, issuer_cert, sct, i):
+def validate_signature(cert: x509.Certificate, issuer_cert: x509.Certificate, sct: dict, i: int) -> bool:
     timestamp = bytes.fromhex(hex(round(sct["timestamp"].replace(tzinfo=datetime.timezone.utc).timestamp() * 1000))[2:].zfill(16))
     issuer_public_key_hash = hashlib.sha256(issuer_cert.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)).digest()
 
@@ -167,6 +169,12 @@ def validate_signature(cert, issuer_cert, sct, i):
     sct_data += cert.tbs_precertificate_bytes                                       # PreCert.TBSCertificate (actual bytes)
     sct_data += b"\x00\x00"                                                         # CtExtensions.opaque: 2-byte-length(extensions)
     sct_data += b""                                                                 # CtExtensions -- no extension types are defined at this time.
+    
+    # Check to ensure CT Log server public key was mapped into CT Log Map
+    if sct["ct_log_key"] == None:
+        logging.error(f'Could not identify Certificate Transparency log server public key.')
+        return False
+    
     pubkey = load_der_public_key(base64.b64decode(sct["ct_log_key"]))               # Loads public key of CT log server
         
     try:
@@ -177,7 +185,7 @@ def validate_signature(cert, issuer_cert, sct, i):
         logging.error("  SCT signature FAILED to validate!!")
         return False
         
-def check_ctlog_inclusion(flow, leaf_cert):
+def check_ctlog_inclusion(flow: http.HTTPFlow, leaf_cert: x509.Certificate) -> Tuple[bool, bool, Optional[str]]:
     logging.warning(f"-----------------------------------Entering check_ctlog_inclusion()--------------------------------------------------")
     leaf_cert_sha256 = leaf_cert.fingerprint(hashes.SHA256()).hex()
     leaf_precert_tbs_sha256 = hashlib.sha256(leaf_cert.tbs_precertificate_bytes).hexdigest()
@@ -188,21 +196,17 @@ def check_ctlog_inclusion(flow, leaf_cert):
 
     # TODO - Insert code here to perform inclusion proofing depending on CT validation level configured in config.toml.
 
-    # Gets all SANs in cert.  We won't check against all, but this lets us check for wildcard entries.
+    # Gets all FQDNs in cert (CN + SANs).  If present in cert, use FQDN from flow object for SSLMate query, otherwise use first FQDN in returned list.
     cert_domains = get_cert_domains(leaf_cert)    
     fqdn = (flow.request.pretty_host).lower()
-    lower_case_cert_domains = [fqdn.lower() for fqdn in cert_domains]
-    if fqdn in lower_case_cert_domains:
+    if len(cert_domains) == 0:
+        logging.error(f'Cannot identify FQDN for which to query SSLMate!')
+        return False, False, f'Cannot identify FQDN for which to query SSLMate!'
+
+    if fqdn in cert_domains:
         target_fqdn = fqdn
     else:
-        # Check to see if FQDN in URL is handled via wildcard entry in cert
-        fqdn_parts=fqdn.split(".")
-        if len(fqdn_parts) > 2:
-            base_domain = ".".join(fqdn_parts[1:])
-            if f'*.{base_domain}' in cert_domains:
-                target_fqdn = f'*.{base_domain}'
-            else:
-                logging.error(f'Cannot identify FQDN for which to query SSLMate!')
+        target_fqdn = cert_domains[0]
     
     logging.warning(f'Searching SSLMate for: {target_fqdn}')
     max_retries = 2
@@ -239,9 +243,7 @@ def check_ctlog_inclusion(flow, leaf_cert):
         
         if records == False:
             logging.error(f'Unable to query SSLMate for {flow.request.pretty_host}; FAILING CLOSED!')
-            # TODO - This failure mode results in a (potentially) false verdict that the leaf cert has not been included in CT logs.
-            #        Extend the return value to include more verbose description.
-            return found, revoked  # False, False
+            return found, revoked, f'Error encountered attempting to query SSLMate {e} '  # False, False, error
 
         # SSLMate truncates responses at 100 records per request, so if less than 100 records are returned it indicates the end of the recordset.
         # ...Otherwise append an "&after=xxxx" query parameter (where xxxx is the last record ID number from the previous recordset) to retrieve the next recordset.
@@ -251,7 +253,7 @@ def check_ctlog_inclusion(flow, leaf_cert):
     
     if all_records == []:
         logging.error(f'Empty response from SSLMate for {flow.request.pretty_host}')
-        return found, revoked  # False, False
+        return found, revoked, None  # False, False, None
 
     logging.info(f'Number of CT log records:       {len(all_records)}')
 
@@ -283,5 +285,5 @@ def check_ctlog_inclusion(flow, leaf_cert):
     if not found:
         logging.warning(f'Hash for {flow.request.pretty_host} not found in CT log!')
 
-    return found, revoked  
+    return found, revoked, None
     

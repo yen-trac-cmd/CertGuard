@@ -8,7 +8,8 @@ from datetime import datetime, timedelta, timezone
 from dns.rdtypes.ANY import CAA
 from error_screen import error_screen
 from helper_functions import cert_to_x509, get_cert_domains, supported_ciphers_list
-from mitmproxy import ctx, http
+from mitmproxy import ctx, http, addonmanager
+from typing import Sequence, Optional, Tuple
 from urllib.parse import urlparse
 import certifi
 import dns.resolver
@@ -22,7 +23,7 @@ import verify_SCTs
 CONFIG = Config()
 BYPASS_PARAM = "CertGuard-Token"
 
-def load(loader):
+def load(loader: addonmanager.Loader) -> None:
     if CONFIG.logging_level in ["debug", "info", "warn", "error", "alert"]:
         opts = ctx.options.keys()
         if "console_eventlog_verbosity" in opts:
@@ -72,8 +73,16 @@ def load(loader):
 
     logging.warning(f"===> Reloaded CertGuard Addon")
 
-def get_root_store():
-    # Load trusted roots from certifi
+def get_root_store() -> list[x509.Certificate]:
+    """
+    Loads trusted root certificates from local certifi store, along with any defined custom roots.
+
+    Args:
+        None
+    
+    Returns:
+        roots (list): List of cryptography.x509.Certificate objects for each root certificate enumerated.
+    """
     if not os.path.exists(certifi.where()):
         logging.fatal(f"FATAL Error: Cannot locate certifi store at {certifi.where()}. Try updating the 'certifi' package for your OS!")
         sys.exit()
@@ -111,9 +120,12 @@ def get_root_store():
     logging.info(f'Total root certificates loaded: {len(roots)}')
     return roots
 
-def verify_signature(subject: x509.Certificate, issuer: x509.Certificate):
-    #Cryptographically verify that `issuer` signed `subject`.
-    #Handles RSA (PKCS#1 v1.5 and basic PSS), ECDSA, Ed25519/Ed448, and DSA.
+def verify_signature(subject: x509.Certificate, issuer: x509.Certificate) -> None:
+    """
+    Cryptographically verify that `issuer` signed `subject`.
+    
+    Handles RSA (PKCS#1 v1.5 and basic PSS), ECDSA, Ed25519/Ed448, and DSA.
+    """
     pub = issuer.public_key()
     oid = subject.signature_algorithm_oid
     h = subject.signature_hash_algorithm  # a HashAlgorithm instance, or None for EdDSA
@@ -161,7 +173,7 @@ def verify_signature(subject: x509.Certificate, issuer: x509.Certificate):
     else:
         raise TypeError(f"Unsupported public key type: {type(pub)}")
 
-def get_cdp(cert):
+def get_cdp(cert: x509.Certificate) -> list[x509.CRLDistributionPoints]:
     crl_urls = []
     try:
         crl_dp_extension = cert.extensions.get_extension_for_class(
@@ -180,15 +192,18 @@ def get_cdp(cert):
                 crl_urls.append(general_name.value)   
     return crl_urls
 
-def get_root_cert(chain, root_store):
+def get_root_cert(chain: Sequence[x509.Certificate], root_store: Sequence[x509.Certificate]) -> Tuple[Optional[x509.Certificate], Optional[str]]:
     """
-    Given an HTTPS mitmproxy flow, attempt to resolve and verify the root CA certificate for the server's certificate chain.
+    Given a mitmproxy https flow.server_conn.certificate_list, attempt to resolve and verify the root CA certificate for the server's certificate chain.
 
     Args:
-        chain: list of mitmproxy Cert objects
-        root_store: list of cryptography.x509.Certificate objects
+        chain (Sequence): Ordered certificate chain presented by the server (leaf first, intermediates, and optionally a root cert), in the form of a 
+            mitmproxy flow.server_conn.certificate_list.
+        root_store (Sequence[x509.x509.Certificate]): List of trusted root certificates to match against.
     Returns:
-        tuple (root_cert, claimed_root)
+        Tuple[Optional[x509.Certificate], Optional[str]]: (root_cert, identifier)
+            root_cert: matched root cert from root_store, or None if no match.
+            identifier: CN (preferred) or full RFC 4514 subject string of the matched root cert, or None if no root identified.
     """
     # Convert mitmproxy Cert object to cryptography.x509.Certificate
     server_chain = [cert_to_x509(cert) for cert in chain]
@@ -206,30 +221,43 @@ def get_root_cert(chain, root_store):
             return None, None
             
     # Verify last cert in chain against a trusted root anchors 
-    last_cert = server_chain[-1]
     cdp=get_cdp(server_chain[0])                                #  This eventually needs moved to its own check...  ###########
     logging.info(f'Length of presented chain:       {len(server_chain)}')
-    logging.warning(f"LEAF cert CDP value(s):          {cdp}")  #  This eventually needs moved to its own check...  #######################
-    logging.warning(f"LEAF cert subject:               {server_chain[0].subject.rfc4514_string()}")
-    logging.warning(f"LEAF cert issuer:                {server_chain[0].issuer.rfc4514_string()}")
-    logging.warning(f"LEAF cert not valid before:      {server_chain[0].not_valid_before_utc}")
-    logging.warning(f"LEAF cert not valid after:       {server_chain[0].not_valid_after_utc}")
-    logging.debug(f"LEAF cert serial number:        {server_chain[0].serial_number}")
-    logging.debug(f"LEAF cert fingerprint:          {(server_chain[0].fingerprint(hashes.SHA256())).hex()}")
+    logging.info(f"LEAF cert CDP value(s):              {cdp}")  #  This eventually needs moved to its own check...  #######################
+    logging.warning(f"LEAF cert subject:                   {server_chain[0].subject.rfc4514_string()}")
+    logging.info(f"LEAF cert issuer:                    {server_chain[0].issuer.rfc4514_string()}")
+    logging.info(f"LEAF cert not valid before:          {server_chain[0].not_valid_before_utc}")
+    logging.info(f"LEAF cert not valid after:           {server_chain[0].not_valid_after_utc}")
+    logging.debug(f"LEAF cert serial number:            {server_chain[0].serial_number}")
+    logging.debug(f"LEAF cert fingerprint:              {(server_chain[0].fingerprint(hashes.SHA256())).hex()}")
+
+    if len(server_chain) == 1:
+        return None, server_chain[0].issuer.rfc4514_string()
+
+    issuer_cert = server_chain[1]
+    last_cert = server_chain[-1]
+
     if len(server_chain) > 1:
-        logging.info(f"Issuing CA Subject:              {last_cert.subject.rfc4514_string()}")
-        logging.info(f"Issuing CA Issuer:               {last_cert.issuer.rfc4514_string()}")
-        logging.debug(f"Issuing CA serial number:       {last_cert.serial_number}")
-        logging.info(f"Issuing CA not valid before UTC: {last_cert.not_valid_before_utc}")
-        logging.info(f"Issuing CA not valid after UTC:  {last_cert.not_valid_after_utc}")
-        logging.debug(f"Issuing CA fingerprint:          {(last_cert.fingerprint(hashes.SHA256())).hex()}")
-        
+        logging.warning(f"Issuing CA Subject:                  {issuer_cert.subject.rfc4514_string()}")
+        logging.info(f"Issuing CA Issuer:                   {issuer_cert.issuer.rfc4514_string()}")
+        logging.debug(f"Issuing CA serial number:           {issuer_cert.serial_number}")
+        logging.info(f"Issuing CA not valid before UTC:     {issuer_cert.not_valid_before_utc}")
+        logging.info(f"Issuing CA not valid after UTC:      {issuer_cert.not_valid_after_utc}")
+        logging.debug(f"Issuing CA fingerprint:             {(issuer_cert.fingerprint(hashes.SHA256())).hex()}")
+    if len(server_chain) > 2:
+        logging.warning(f"Subordinate CA Subject:              {last_cert.subject.rfc4514_string()}")
+        logging.info(f"Subordinate CA Issuer:               {last_cert.issuer.rfc4514_string()}")
+        logging.debug(f"Subordinate CA serial number:       {last_cert.serial_number}")
+        logging.info(f"Subordinate CA not valid before UTC: {last_cert.not_valid_before_utc}")
+        logging.info(f"Subordinate CA not valid after UTC:  {last_cert.not_valid_after_utc}")
+        logging.debug(f"Subordinate CA fingerprint:         {(last_cert.fingerprint(hashes.SHA256())).hex()}")
+
     for root in root_store:
         if root.subject == last_cert.issuer:
             try:
                 verify_signature(last_cert, root)
-                logging.info(f'Chain verified against root CA:  {root.subject.rfc4514_string()}')
-                logging.info(f'Root cert fingerprint:           {(root.fingerprint(hashes.SHA256())).hex()}')
+                logging.warning(f'Chain verified against root CA:      {root.subject.rfc4514_string()}')
+                logging.info(f'Root cert fingerprint:               {(root.fingerprint(hashes.SHA256())).hex()}')
                 return root, None
             except Exception as e:
                 logging.fatal(f"Root CA cert verification failed: {e}")
@@ -242,7 +270,19 @@ def get_root_cert(chain, root_store):
     except:
         return None, last_cert.issuer.rfc4514_string()
 
-def root_country_check(flow, root):
+def root_country_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, Optional[str]]:
+    """
+    Check the country of the root CA certificate for a mitmproxy HTTP flow to see if it's blocked or allowed (depending on user configuration).
+
+    Args:
+        flow (mitmproxy.http.HTTPFlow): The HTTP flow representing a single HTTP transaction.
+        root (x509.Certificate): The root CA certificate to check.
+
+    Returns:
+        Tuple[ErrorLevel, Optional[str]]: 
+            ErrorLevel: Enum indicating severity of check results.
+            Optional[str]: Description of country violation, or None if not applicable.
+    """
     logging.warning(f"-----------------------------------Entering root_country_check()------------------------------------------")
     logging.info(f'Root certificate subject:        {root.subject.rfc4514_string()}')
 
@@ -271,7 +311,29 @@ def root_country_check(flow, root):
             
     return ErrorLevel.NONE, None
 
-def controlled_CA_checks(flow, root):
+def controlled_CA_checks(flow: http.HTTPFlow, root: x509.Certificate) -> tuple["ErrorLevel", Optional[str]]:
+    """
+    Perform controlled certificate authority (CA) checks on the provided root certificate.
+    
+    This function inspects the subject fields of the root CA (Common Name, Organization,
+    and full Distinguished Name) and compares them against configured lists of
+    prohibited and restricted root issuers defined in the `config.toml` file.
+
+    ### Args:
+        - flow (mitmproxy.http.HTTPFlow):
+            - The mitmproxy HTTP flow associated with the current transaction, but not 
+            actually used by controlled_CA_checks().
+        - root (x509.Certificate):
+            - The root CA certificate presented by the server.
+
+    ### Returns:
+        - tuple[ErrorLevel, Optional[str]]:
+        A two-element tuple `(ErrorLevel, message)` indicating the result of the check.
+            - `ErrorLevel.FATAL`, message — if the root CA is explicitly prohibited.
+            - `ErrorLevel.CRIT`, message — if the root CA is restricted.
+            - `ErrorLevel.NONE`, `None` — if no restrictions or violations are detected.
+    """
+    
     logging.warning(f"-----------------------------------Entering controlled_CA_checks()----------------------------------------")
     identifiers=[]
     
@@ -299,7 +361,7 @@ def controlled_CA_checks(flow, root):
         return ErrorLevel.CRIT, violation
     return ErrorLevel.NONE, None
 
-def example_check(flow, root):
+def example_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, Optional[str]]:
     # Modified example rule from mitmproxy documentation
     if "https://www.example.com/path" in flow.request.pretty_url:
         logging.info(".-=Triggered Example Auto-Response=-.")
@@ -307,11 +369,20 @@ def example_check(flow, root):
         return ErrorLevel.INFO, violation
     return ErrorLevel.NONE, None
 
-def verify_cert_caa(flow, root) -> dict[str, bool]:
+def verify_cert_caa(flow: http.HTTPFlow, root: x509.Certificate) -> tuple[ErrorLevel, str]:
+    """ 
+    For each FQDN in the cert, verify if the issuing CA is authorized via CAA.  Supports both 'issue' and 'issuewild' tags.  Returns a dictionary in the form of {domain: allowed}.
+
+    Args:
+        flow (mitmproxy.flow object): The flow for the current HTTP request; used to extract iussing CA and look up CAA domain identifiers.
+        root (cryptography.x509.Certificate): Unused by verify_cert_caa(), but part of common for loop that calls into various CertGuard check functions.
+
+    Returns:
+        tuple[ErrorLevel, str]: A tuple consisting of the ErrorLevel (based on the verdict for the CAA verification logic) and, if applicable, a string 
+        capturing the violation(s) encountered.
+    """
     logging.warning(f"-----------------------------------Entering verify_cert_caa()---------------------------------------------")
-    # For each FQDN in the cert, verify if the issuing CA is authorized via CAA.
-    # Supports both 'issue' and 'issuewild' tags.  Returns a dictionary in the form of {domain: allowed}.
-    
+
     leaf = flow.server_conn.certificate_list[0]
     x509_leaf = cert_to_x509(leaf)
     
@@ -327,22 +398,29 @@ def verify_cert_caa(flow, root) -> dict[str, bool]:
     ca_identifiers=ca_org_to_caa.get(org, ["UNKNOWN issue-domain-name identifier!  Please update 'ca_org_mapping.py' file"]) 
     logging.info(f' Matching CA identifiers: {ca_identifiers}')
 
-    cert_domains = get_cert_domains(x509_leaf)    # Gets all SANs in cert.  We won't check against all, but this lets us check for wildcard entries.
+    # Gets all FQDNs in cert (CN + SANs).  We won't check against all, but this lets us check for wildcard entries.
+    cert_domains = get_cert_domains(x509_leaf)
+    if len(cert_domains) == 0:
+        logging.error(f'No FQDNs found in cert presented when connecting to {fqdn}.')
+        return ErrorLevel.FATAL, f'Certificate returned for {fqdn} does not contain any FQDNs!' 
     logging.debug(f'All domains from leaf cert: {cert_domains}')
     
     check_domains=[]
     fqdn = (flow.request.pretty_host).lower()
-    lower_case_cert_domains = [fqdn.lower() for fqdn in cert_domains]
-    if fqdn in lower_case_cert_domains:
+    if fqdn in cert_domains:
         check_domains.append(fqdn)
         
     # Check to see if FQDN in URL is handled via wildcard entry in cert
     fqdn_parts=fqdn.split(".")
     if len(fqdn_parts) > 2:
         base_domain = ".".join(fqdn_parts[1:])
-        logging.info(f' base_domain(): {base_domain}')
+        logging.info(f' base_domain: {base_domain}')
         if f'*.{base_domain}' in cert_domains:
             check_domains.append(f'*.{base_domain}')
+
+    if len(check_domains)==0:
+        logging.error(f'Certificate not valid for FQDN of {fqdn}.')
+        return ErrorLevel.CRIT, f'⚠️ Certificate <a href=https://knowledge.digicert.com/solution/name-mismatch-in-web-browser target="_blank">name mismatch</a>; cert not valid for <code>{fqdn}</code>.' 
 
     logging.info(f' Checking CAA records for these domains = {check_domains}')
 
@@ -375,7 +453,7 @@ def verify_cert_caa(flow, root) -> dict[str, bool]:
 
     return ErrorLevel.NONE, None
     
-def is_zone_signed(domain):           ##################### issue is that I'm looking for NS records against subdomains...  don't
+def is_zone_signed(domain):
     logging.warning(f"===================================Entering is_zone_signed()========================================")
     ######## will DNS *always* return SOA with any query for non-existent record?  If so, chase that.  ...If not, do devolution thing to get SOA.  ...THEN query for NS.
     try:
@@ -410,7 +488,7 @@ def is_zone_signed(domain):           ##################### issue is that I'm lo
         logging.error(f"An unexpected error occurred: {e}")
         return False
 
-def check_caa_per_domain(domain: str, ca_identifiers: list[str]) -> bool:
+def check_caa_per_domain(domain: str, ca_identifiers: list[str]) -> tuple[bool, str]:
     logging.warning(f"-----------------------------------Entering check_caa_per_domain()----------------------------------------")
     # Check CAA records for the given domain.
     is_wildcard = domain.startswith("*.")
@@ -456,7 +534,7 @@ def check_caa_per_domain(domain: str, ca_identifiers: list[str]) -> bool:
             if answers.flags & dns.flags.AD:   # Indicates a DNSSEC-validated resposne; dns.flags.AD = 32
                 logging.info(f'DNSSEEC validation successful (AD bit set in response).')
             else:
-                logging.fatal(f'DNSSEEC validation for {check_domain} failed.')         #### Ideally structured to raise FATAL on failed DNSSEC validation for signed zone.
+                logging.fatal(f'DNSSEEC validation for {check_domain} failed.')
 
         except Exception as e:
             logging.warning(f' Aborting further CAA checks due to exception: "{e}"')
@@ -526,7 +604,33 @@ def check_caa_per_domain(domain: str, ca_identifiers: list[str]) -> bool:
     logging.warning(f'No published CAA record found; return true per RFC8659')
     return True, None # No CAA record founds; return true per RFC8659
 
-def prior_approval_check(flow, root_cert, quick_check=False):
+def prior_approval_check(flow: http.HTTPFlow, root_cert: x509.Certificate, quick_check: bool =False) -> bool | tuple[ErrorLevel, Optional[str]]:
+    """
+    Check whether the given host and root certificate have been previously approved,
+    or if a root CA change has occurred since the last recorded decision.
+
+    This function consults the local SQLite database to determine whether the
+    host has a prior approval record and whether the associated root certificate
+    fingerprint matches the stored record.
+
+    Args:
+        flow (mitmproxy.http.HTTPFlow):
+            The mitmproxy HTTP flow representing the transaction (used to extract the host).
+        root_cert (x509.Certificate):
+            The root CA certificate currently presented by the server.
+        quick_check (bool, optional):
+            If True, perform a fast lookup to confirm whether the host and root
+            fingerprint match a previously approved record. Defaults to False.
+
+    Returns:
+        bool | tuple[ErrorLevel, Optional[str]]:
+            - If `quick_check` is True:
+                - `True` if the host/root pair matches an existing "approved" record.
+                - `False` if no record exists or the fingerprints differ.
+            - If `quick_check` is False:
+                - `(ErrorLevel.CRIT, str)` if a mismatch is detected.
+                - `(ErrorLevel.NONE, None)` if no issues or no record found.
+    """
     logging.warning(f"-----------------------------------Entering prior_approval_check()--------------------------------------------------")
     # If refactor this function as a class, can persist the 'row' value below so there's only one SQL query
     host = flow.request.pretty_host
@@ -558,7 +662,7 @@ def prior_approval_check(flow, root_cert, quick_check=False):
             logging.info(f"No mismatched root CA records found for {host} in database.")   
         return ErrorLevel.NONE, None   # Assumes no row returned, or consistent root_fingerprint 
 
-def record_decision(host, decision, root_fingerprint):
+def record_decision(host, decision, root_fingerprint) -> None:
     now = datetime.now(timezone.utc).isoformat()
     with sqlite3.connect(CONFIG.db_path) as conn:
         conn.execute("REPLACE INTO decisions (host, decision, root, timestamp) VALUES (?, ?, ?, ?)", (host, decision, root_fingerprint, now))
@@ -568,7 +672,7 @@ def record_decision(host, decision, root_fingerprint):
         #approved_hosts.add(host)
         #logging.info(f'Approved hosts after adding from user decision: {approved_hosts}')
 
-def is_navigation_request(flow, referer_header, accept_header):
+def is_navigation_request(flow: http.HTTPFlow, referer_header, accept_header) -> bool:
     logging.debug(f"-----------------------------------Entering is_navigation_request()----------------------------------------")
     method = flow.request.method.upper()
     
@@ -606,7 +710,7 @@ def is_navigation_request(flow, referer_header, accept_header):
     logging.info(f"Could not ascertain new browser navigation; returning False.")
     return False
 
-def sct_check(flow, root):
+def sct_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, Optional[str]]:
     logging.warning(f"-----------------------------------Entering sct_check()--------------------------------------------------")
     cert   = cert_to_x509(flow.server_conn.certificate_list[0])
     issuer_cert = cert_to_x509(flow.server_conn.certificate_list[1])
@@ -635,7 +739,11 @@ def sct_check(flow, root):
                 violations.append(f'⛔ Digital signature validation for <a href=https://certificate.transparency.dev/howctworks/ target="_blank">SCT</a> #{i} failed!')
 
     # Make call to SSLMate to check for cert/precert inclusion in Certificate Transparency log(s)
-    found, revoked = verify_SCTs.check_ctlog_inclusion(flow, cert)
+    found, revoked,error = verify_SCTs.check_ctlog_inclusion(flow, cert)
+
+    if error:
+        logging.error(f'Could not check for Certificate Transparency inclusion: {error}.')
+        return ErrorLevel.FATAL, f'{error}'
     if found:
         logging.info(f'Publication in Certificate Transparency log confirmed.')
     else:
@@ -665,6 +773,101 @@ def sct_check(flow, root):
 
     return ErrorLevel.NONE, None
 
+def expiry_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, Optional[str]]:
+    """Check if any certificate in the chain is expired."""
+    logging.warning("-----------------------------------Entering expiry_check()----------------------------------------")
+
+    # Build full chain (leaf → root)
+    cert_chain = [cert_to_x509(cert) for cert in flow.server_conn.certificate_list] + [root]
+    now = datetime.now(timezone.utc)
+    chain_length = len(cert_chain)
+    expired = []
+
+    for i, cert in enumerate(cert_chain, start=1):
+        not_after = cert.not_valid_after.replace(tzinfo=timezone.utc)
+        if now > not_after:
+            cn_attrs = cert.subject.get_attributes_for_oid(x509.NameOID.COMMON_NAME)
+            cn = cn_attrs[0].value if cn_attrs else cert.subject.rfc4514_string()
+            expiry = not_after.strftime("%Y-%m-%d")
+            logging.error(f"Found expired cert: {cn} at chain position {i}")
+            expired.append((i, cn, expiry))
+
+    if not expired:
+        return ErrorLevel.NONE, None
+
+    def label_for_position(pos: int) -> str:
+        if pos == 1:
+            return "Leaf cert"
+        if pos == 2:
+            return "Issuing CA"
+        if pos == chain_length:
+            return "Root"
+        return "Subordinate"
+
+    violations = [
+        f'&emsp;&emsp;▶ {label_for_position(i)} <code>{cn}</code> expired on {exp}'
+        for i, cn, exp in expired
+    ]
+
+    error_message = f'⚠️ Expired certificate(s) identified:<br>{"<br>".join(violations)}'
+    return ErrorLevel.CRIT, error_message   
+
+def identity_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, Optional[str]]:
+    """Check if any certificate in the chain lacks a subject, or if the leaf cert lacks a SAN."""
+    logging.warning("-----------------------------------Entering identity_check()----------------------------------------")
+
+    # Build full chain (leaf → root)
+    cert_chain = [cert_to_x509(cert) for cert in flow.server_conn.certificate_list] + [root]
+    chain_length = len(cert_chain)
+    violations = []
+
+    def label_for_position(pos: int) -> str:
+        if pos == 1:
+            return "Leaf cert"
+        if pos == 2:
+            return "Issuing CA cert"
+        if pos == chain_length:
+            return "Root"
+        return "Subordinate"
+
+    for i, cert in enumerate(cert_chain, start=1):
+        label = label_for_position(i)
+        cn_attrs = cert.subject.get_attributes_for_oid(x509.NameOID.COMMON_NAME)
+        cn = cn_attrs[0].value if cn_attrs else cert.subject.rfc4514_string() or "(no subject)"
+        subject_missing = not cert.subject or len(cert.subject) == 0
+        san_missing = False
+
+        # Only check SAN for the leaf certificate
+        if i == 1:
+            try:
+                san_ext = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
+                san_entries = san_ext.value.get_values_for_type(x509.DNSName)
+                san_missing = len(san_entries) == 0
+            except x509.ExtensionNotFound:
+                san_missing = True
+
+        # Collect any violations
+        if subject_missing or san_missing:
+            logging.error(
+                f"{label} ({cn}) is missing "
+                f"{'subject' if subject_missing else ''}"
+                f"{' and ' if subject_missing and san_missing else ''}"
+                f"{'SAN' if san_missing else ''}."
+            )
+
+            if subject_missing and san_missing:
+                violations.append(f'&emsp;&emsp;▶ {label} <code>{cn}</code> missing both Subject and SAN fields.')
+            elif subject_missing:
+                violations.append(f'&emsp;&emsp;▶ {label} <code>{cn}</code> missing Subject field.')
+            elif san_missing:
+                violations.append(f'&emsp;&emsp;▶ {label} <code>{cn}</code> missing Subject Alternative Name (SAN).')
+
+    if not violations:
+        return ErrorLevel.NONE, None
+
+    error_message = f'⚠️ Identity issue(s) found in certificate chain:<br>{"<br>".join(violations)}'
+    return ErrorLevel.CRIT, error_message
+
 #====================================================================== Main control logic===================================================================
 
 approved_hosts = set()
@@ -673,6 +876,7 @@ pending_requests = {}
 # Load Certifi roots + any custom roots
 root_store = get_root_store()
 
+# Load Certificate Transparency 
 ct_log_map = verify_SCTs.load_ct_log_list()
 if ct_log_map == None:
     logging.fatal('Can not load Certificate Transparency log_list.json file!  Please check DNS resolution and Internet connectivity.')
@@ -702,7 +906,7 @@ def request(flow: http.HTTPFlow) -> None:
     if not cert_chain:
         logging.info(f'Unencrypted connection; skipping further checks.')
         return
-    logging.debug(f'Trustchain provided by the server: {cert_chain}')
+    logging.debug(f'Cert chain provided by the server: {cert_chain}')
 
     leaf_cert = cert_chain[0]
     logging.debug(f'The leaf cert is: {leaf_cert.cn} =-.')
@@ -711,12 +915,13 @@ def request(flow: http.HTTPFlow) -> None:
     # Retrieve validated root cert as cryptography.hazmat.bindings._rust.x509.Certificate object.
     root_cert, claimed_root = get_root_cert(cert_chain, root_store)
     if root_cert:
-        logging.warning(f'Successfully retreived CA Root:  {root_cert.subject.rfc4514_string()}')
+        logging.warning(f'Successfully retreived CA Root:      {root_cert.subject.rfc4514_string()}')
         root_hash = (root_cert.fingerprint(hashes.SHA256())).hex()
     else:
+        # Note: As currently constructed, this error cannot be anything less than FATAL since the 'Proceed Anyway' button won't work.
         logging.fatal(f'FATAL: Could not validate trust anchor root ({claimed_root}) for cert chain!')
-        violation = f'⛔ Could not validate cert against claimed root of:<br>&nbsp&nbsp&nbsp&nbsp<b>{claimed_root}</b>'
-        error_screen(flow, None, ErrorLevel.CRIT.color, [violation], ErrorLevel.CRIT.value)
+        violation = f'⛔ Could not validate cert against claimed root of:<br>&emsp;&emsp;<b>{claimed_root}</b>'
+        error_screen(flow, None, ErrorLevel.FATAL.color, [violation], ErrorLevel.FATAL.value)
         return
     
     # Check to see if hostname is already approved in the database.
@@ -782,7 +987,7 @@ def request(flow: http.HTTPFlow) -> None:
         "body": flow.request.content
     }
 
-    my_checks = [root_country_check, controlled_CA_checks, example_check, verify_cert_caa, prior_approval_check, sct_check]  # 
+    my_checks = [root_country_check, controlled_CA_checks, example_check, expiry_check, identity_check, verify_cert_caa, prior_approval_check, sct_check]  # 
     violations=[]
     for check in my_checks:
         error, violation = check(flow, root_cert)

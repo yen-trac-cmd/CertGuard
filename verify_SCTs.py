@@ -6,6 +6,7 @@ import os
 import requests
 import sys
 import time
+import urllib.parse
 from requests_cache import CachedSession
 from helper_functions import get_cert_domains
 from cryptography import x509, exceptions
@@ -53,7 +54,7 @@ class RevocationReason(IntEnum):
 
 def load_ct_log_list() -> dict:
     """
-    Loads the CT log list and transforms it into a dictionary of CT log entry metadata, keyed by log_id_bytes.
+    Loads Google's well-known CT log list and transforms it into a dictionary of CT log entry metadata, keyed by log_id_bytes.
     """
     
     session = CachedSession('./resources/ct_log_list.json', expire_after=timedelta(hours=24), backend="filesystem", stale_if_error=True, allowable_codes=[200])
@@ -109,6 +110,58 @@ def load_ct_log_list() -> dict:
 
     return mapping
 
+def parse_ct_extensions(ext_bytes: bytes) -> dict:
+    """
+    Parse Static CT API-style SCT extensions into a dictionary.
+   
+    Args:
+        ext_bytes (bytes): The extracted extension bytes from a Signed Certificate Timestamp (SCT)
+
+    Returns:
+        dict: A 1-item dictionary with one of three possible keys:
+            'leaf_index': The index of a leaf certificate in CT Log server implementing the Static Certificate Transparency API (fomerly known as 'Sunlight')
+            'leaf_index_error': The (non-compliant) number of bytes parsed for a type-0 (lef_index) SCT extension (Any byte length other than 5 is invalid)
+            'Unknown SCT extension type x': Provides hex listing of data bytes for unknown extension types, where 'x' is the extension type number.
+    
+    Each extension is encoded as:
+        1 byte  - extension_type
+        2 bytes - length (big-endian)
+        N bytes - extension_data
+    """
+    parsed = {}
+    offset = 0
+    total_length = len(ext_bytes)
+
+    while offset < total_length:
+        # --- Parse header ---
+        remaining = total_length - offset
+        if remaining < 3:
+            # Not enough bytes left for a valid header
+            break
+
+        extension_type = ext_bytes[offset]
+        extension_length = int.from_bytes(ext_bytes[offset + 1:offset + 3], "big")
+        offset += 3  # move past header
+
+        # --- Extract data ---
+        if offset + extension_length > total_length:
+            # Prevent buffer overrun if malformed
+            break
+
+        extension_data = ext_bytes[offset:offset + extension_length]
+        offset += extension_length
+
+        # --- Handle known extension types ---
+        if extension_type == 0:  # leaf_index
+            if len(extension_data) == 5:
+                parsed["leaf_index"] = int.from_bytes(extension_data, "big")
+            else:
+                parsed["leaf_index_error"] = f"Unexpected length: {len(extension_data)} bytes"
+        else:
+            parsed[f"Unknown SCT extension type {extension_type}"] = extension_data.hex()
+
+    return parsed
+
 def extract_scts(flow: http.HTTPFlow, cert: x509.Certificate, ct_log_map) -> list[dict]:
     logging.warning(f"-----------------------------------Entering extract_scts()--------------------------------------------------")
     # LIMITATION: The code only extracts SCTs embedded inside X.509 certs. Additional extraction logic is 
@@ -132,32 +185,51 @@ def extract_scts(flow: http.HTTPFlow, cert: x509.Certificate, ct_log_map) -> lis
 
     sct_data = []
     for sct in scts:
-        entry = ct_log_map.get(sct.log_id)
+        ct_log_entry = ct_log_map.get(sct.log_id)
+        parsed_exts = parse_ct_extensions(sct.extension_bytes)
 
         sct_data.append({
             "version": sct.version.name,
             "log_id_hex": sct.log_id.hex(),
             "log_id_b64": base64.b64encode(sct.log_id).decode(),
             "timestamp": sct.timestamp,
-            "timestamp (unix ms)": int(sct.timestamp.timestamp()*1000),
-            "extension_bytes": sct.extension_bytes.hex(),
+            "timestamp_unix": int(sct.timestamp.timestamp()*1000),
             "entry_type": sct.entry_type.name,
             "hash_algorithm": sct.signature_hash_algorithm.name,
             "signature_algorithm": sct.signature_algorithm.name,
             "signature": sct.signature.hex(),
-            "ct_log_description": entry.get("description") if entry else None,
-            "ct_log_operator": entry.get("operator_name") if entry else None,
-            "ct_log_key": entry.get("key") if entry else None,
-            "ct_log_url": entry.get("url") if entry else None,
-            "ct_log_mmd": entry.get("mmd") if entry else None,
-            "ct_log_state": entry.get("state") if entry else None,
-            "ct_log_temporal_interval": entry.get("temporal_interval") if entry else None,
+            "extension_bytes": sct.extension_bytes.hex(),
+            **parsed_exts, # include leaf_index for static CT API and/or other parsed extensions, if present.
+            "ct_log_description": ct_log_entry.get("description") if ct_log_entry else None,
+            "ct_log_operator": ct_log_entry.get("operator_name") if ct_log_entry else None,
+            "ct_log_key": ct_log_entry.get("key") if ct_log_entry else None,
+            "ct_log_url": ct_log_entry.get("url") if ct_log_entry else None,
+            "ct_log_mmd": ct_log_entry.get("mmd") if ct_log_entry else None,
+            "ct_log_state": ct_log_entry.get("state") if ct_log_entry else None,
+            "ct_log_temporal_interval": ct_log_entry.get("temporal_interval") if ct_log_entry else None,
         })
     return sct_data
 
-def validate_signature(cert: x509.Certificate, issuer_cert: x509.Certificate, sct: dict, i: int) -> bool:
+def validate_signature(cert: x509.Certificate, issuer_cert: x509.Certificate, sct: dict) -> tuple[bool, bytes | None]:
+    """
+    Validate ECDSA digital signature on a Signed Certificate Timestamp (SCT)
+    Code adapted from https://research.ivision.com/how-does-certificate-transparency-work.html.
+    
+    Args:
+        cert (x509.Certificate): The cert from which to extract 
+        issuer_cert (x509.Certificate): The Issuing CA cert whose public key hash will be included as part of the signed SCT data structure
+        sct (dict): A dictionary containing the timestamp and signature bytes from a SCT, along with the corresponding CT log server's public ECDSA key
+
+    Returns:
+        bool:  True/False result indicating if the digital signature was verified (or not)
+        bytes: The 'sct_data' structure that forms the basis of the Merkle tree leaf and SCT signature.
+        None:  Returned if validation fails for any reason
+    """
+    #TODO Add support for PKCS#1 v1.5 signatures
     timestamp = bytes.fromhex(hex(round(sct["timestamp"].replace(tzinfo=datetime.timezone.utc).timestamp() * 1000))[2:].zfill(16))
     issuer_public_key_hash = hashlib.sha256(issuer_cert.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)).digest()
+    sct_extension = bytes.fromhex(sct["extension_bytes"])                          # To support future leaf_index extension by static CT API logs
+    ext_length = bytes.fromhex(hex(len(sct_extension))[2:].zfill(4))
 
     sct_data: bytes = bytes()
     sct_data += b"\0"                                                               # Version: 0=v1
@@ -167,25 +239,26 @@ def validate_signature(cert: x509.Certificate, issuer_cert: x509.Certificate, sc
     sct_data += issuer_public_key_hash                                              # PreCert.opaque: issuer_key_hash[32]
     sct_data += bytes.fromhex(hex(len(cert.tbs_precertificate_bytes))[2:].zfill(6)) # PreCert.TBSCertificate.opaque: 3-byte-length 
     sct_data += cert.tbs_precertificate_bytes                                       # PreCert.TBSCertificate (actual bytes)
-    sct_data += b"\x00\x00"                                                         # CtExtensions.opaque: 2-byte-length(extensions)
-    sct_data += b""                                                                 # CtExtensions -- no extension types are defined at this time.
-    
+    sct_data += ext_length                                                          # CtExtensions: 2-byte-length(extensions)
+    sct_data += sct_extension                                                       # CtExtensions; only one type (0) currently defined for leaf_index.
+    #logging.debug(f'Data structure to verify SCT signature against: {sct_data.hex()}')
+
     # Check to ensure CT Log server public key was mapped into CT Log Map
     if sct["ct_log_key"] == None:
         logging.error(f'Could not identify Certificate Transparency log server public key.')
-        return False
+        return False, None
     
-    pubkey = load_der_public_key(base64.b64decode(sct["ct_log_key"]))               # Loads public key of CT log server
+    # Loads public key of CT log server
+    pubkey = load_der_public_key(base64.b64decode(sct["ct_log_key"]))
         
     try:
-        pubkey.verify(bytes.fromhex(sct["signature"]), sct_data, ec.ECDSA(hashes.SHA256()))           # Validates SCT signature against sct_data structure defined above
-        logging.info(f"   SCT #{i} digital signature verified")
-        return True
+        # Validates SCT signature against sct_data structure constructed above
+        pubkey.verify(bytes.fromhex(sct["signature"]), sct_data, ec.ECDSA(hashes.SHA256()))
+        return True, sct_data
     except exceptions.InvalidSignature:
-        logging.error("  SCT signature FAILED to validate!!")
-        return False
+        return False, None
         
-def check_ctlog_inclusion(flow: http.HTTPFlow, leaf_cert: x509.Certificate) -> Tuple[bool, bool, Optional[str]]:
+def ctlog_quick_check(flow: http.HTTPFlow, leaf_cert: x509.Certificate) -> Tuple[bool, bool, Optional[str]]:
     logging.warning(f"-----------------------------------Entering check_ctlog_inclusion()--------------------------------------------------")
     leaf_cert_sha256 = leaf_cert.fingerprint(hashes.SHA256()).hex()
     leaf_precert_tbs_sha256 = hashlib.sha256(leaf_cert.tbs_precertificate_bytes).hexdigest()
@@ -193,8 +266,6 @@ def check_ctlog_inclusion(flow: http.HTTPFlow, leaf_cert: x509.Certificate) -> T
     logging.info(f'Leaf cert SHA256 fingerprint:   {leaf_cert_sha256}')
     logging.debug(f'  - tbs_precertificate_bytes:   {base64.b64encode(leaf_cert.tbs_precertificate_bytes).decode()}')
     logging.info(f'  - Leaf precert TBS SHA256:    {leaf_precert_tbs_sha256} ')
-
-    # TODO - Insert code here to perform inclusion proofing depending on CT validation level configured in config.toml.
 
     # Gets all FQDNs in cert (CN + SANs).  If present in cert, use FQDN from flow object for SSLMate query, otherwise use first FQDN in returned list.
     cert_domains = get_cert_domains(leaf_cert)    
@@ -286,4 +357,165 @@ def check_ctlog_inclusion(flow: http.HTTPFlow, leaf_cert: x509.Certificate) -> T
         logging.warning(f'Hash for {flow.request.pretty_host} not found in CT log!')
 
     return found, revoked, None
+
+def verify_inclusion(sct_data: bytes, ct_log_url: str, sct_timestamp: int, log_mmd: int) -> Tuple[bool, Optional[str]]:
+    """
+    Verify inclusion of a leaf hash using SCT data, accounting for Maximum Merge Delay (MMD).
+
+    Args:
+        sct_data (bytes):     The data structure that the CT log server signs to generate SCTs
+        ct_log_url (str):     An RFC6962-compliant Certificate Transparency log base URL
+        sct_timestamp (int):  The UTC timestamp (in unix epoch miliseconds) recorded in the SCT 
+        log_mmd (int):        The MMD, in seconds, for the CT log server (typically 86,400)
+
+    Returns:
+        bool: Returns True for successful inclusion verification using retrieved audit proof from the CT log.
+    """
+    REQUEST_TIMEOUT = 2.5  # seconds
+    sth_url = ct_log_url + 'ct/v1/get-sth'
+    proof_url_template = ct_log_url + 'ct/v1/get-proof-by-hash?hash={}&tree_size={}'
+
+    #Compute the RFC6962 leaf hash for a MerkleLeaf.  The 0x00 prefix is for timestamped entries (X.509 cert / precert).
+    leaf_hash = hashlib.sha256(b"\x00" + sct_data).digest()
+    leaf_hash_b64 = base64.b64encode(leaf_hash).decode("utf-8")
+
+    # Fetch latest Signed Tree Head from CT log server
+    try:
+        logging.debug(f'Attempting to fetch latest STH from: {sth_url}')
+        sth_resp = requests.get(sth_url, timeout=REQUEST_TIMEOUT)
+        sth_resp.raise_for_status()
+    except requests.exceptions.Timeout:
+        logging.error("Timeout fetching STH.")
+        return False, "Timeout fetching STH."
+    except requests.RequestException as e:
+        logging.error(f"HTTP error fetching STH: {e}")
+        return False, f"HTTP error fetching STH: {e}"
+
+    try:
+        sth = sth_resp.json()
+    except ValueError:
+        logging.error("Failed to decode STH JSON response.")
+        return False, "Failed to decode STH JSON response."
+
+    tree_size = sth.get("tree_size")
+    sth_root_b64 = sth.get("sha256_root_hash")
+    if tree_size is None or sth_root_b64 is None:
+        logging.error("STH missing required fields.")
+        return False, "STH missing required fields."
+
+    sth_root = base64.b64decode(sth_root_b64)
+    logging.info(f" Latest STH: tree_size={tree_size}, root={sth_root_b64}")
+
+    # Fetch Merkle tree inclusion proof
+    leaf_hash_enc = urllib.parse.quote(leaf_hash_b64)
+    proof_url = proof_url_template.format(leaf_hash_enc, tree_size)
+    try:
+        logging.debug(f'Attempting to fetch inclusion proof from: {proof_url}')
+        proof_resp = requests.get(proof_url, timeout=REQUEST_TIMEOUT)
+        if proof_resp.status_code == 404:
+            if sct_timestamp + log_mmd >= int(time.time()):
+                logging.info("Note: Leaf might not yet be included in the current STH (e.g. within MMD).")
+            else:
+                logging.error("Leaf missing and past MMD window!")
+                return False, "Leaf missing and past MMD window!"
+        proof_resp.raise_for_status()
+        proof = proof_resp.json()
+    except requests.exceptions.Timeout:
+        logging.error("Timeout fetching inclusion proof. Try again later.")
+        return False, "Timeout fetching inclusion proof. Try again later."
+    except requests.RequestException as e:
+        logging.error(f"HTTP error fetching inclusion proof: {e}")
+        return False, f"HTTP error fetching inclusion proof: {e}"
+    except ValueError:
+        logging.error("Failed to decode inclusion proof JSON.")
+        return False, "Failed to decode inclusion proof JSON."
+
+    # Validate proof fields
+    if "leaf_index" not in proof or "audit_path" not in proof:
+        logging.error("Proof missing required fields.")
+        return False, "Proof missing required fields."
+
+    leaf_index = proof["leaf_index"]
+    try:
+        audit_path = [base64.b64decode(p) for p in proof["audit_path"]]
+    except Exception as e:
+        logging.error(f"Failed to decode audit path: {e}")
+        return False, f"Failed to decode audit path: {e}"
+
+    # Compute Merkle root and compare against retrieved STH root
+    computed_root = compute_merkle_root(leaf_hash, leaf_index, audit_path, tree_size)
+    computed_root_b64 = base64.b64encode(computed_root).decode()
+
+    logging.info(f" Leaf index: {leaf_index}, audit_path length: {len(audit_path)}")
+    logging.info(f" Computed root: {computed_root_b64}")
+    logging.info(f" STH root:      {sth_root_b64}")
+
+    match = computed_root == sth_root
+    if not match:
+        logging.error('Could not verify cert inclusion from audit proof; computed tree head hash mismatch.')
+        return match, f'Mismatch for computed STH root.  Inclusion not guaranteed.'
+    return match, None
+
+#def base64_to_bytes(s: str) -> bytes:
+#    return base64.b64decode(s)
+
+def compute_rfc6962_parent(left: bytes, right: bytes) -> bytes:
+    """Compute RFC 6962 internal node hash (SHA256(0x01 || left || right))."""
+    return hashlib.sha256(b"\x01" + left + right).digest()
+
+def compute_merkle_root(leaf_hash: bytes, leaf_index: int, audit_path: list, tree_size: int, verbose: bool = False):
+    """
+    Compute Merkle root from leaf hash and audit path.
     
+    Algorithm based on RFC 6962 Section 2.1.1:
+    - Walk up from leaf to root
+    - At each level, determine if current node is left or right child
+    - Combine with sibling from audit path accordingly
+    """
+    if verbose:
+        logging.debug(f"Tree size: {tree_size}")
+        logging.debug(f"Leaf index: {leaf_index}")
+        logging.debug(f"Audit path length: {len(audit_path)}")
+        logging.debug(f"Starting leaf_hash (b64): {base64.b64encode(leaf_hash).decode()}\n")
+    
+    node_hash = leaf_hash
+    node_index = leaf_index
+    last_node_index = tree_size - 1
+    
+    for level, sibling in enumerate(audit_path):
+        if verbose:
+            logging.debug(f"Level {level:02d}: node_index={node_index}, last_node={last_node_index}")
+        
+        # Determine if current node is left or right child
+        # This is based on whether node_index is even or odd at this level AND whether there are nodes to the right
+        
+        if node_index % 2 == 0:
+            # Node index is even - could be left child
+            # Check if there's a right sibling by seeing if last_node > node_index at this level
+            if node_index == last_node_index:
+                # We're at the rightmost position, but still have audit path
+                # This means we need to hash with sibling on the left
+                node_hash = compute_rfc6962_parent(sibling, node_hash)
+                if verbose:
+                    logging.debug(f"  Rightmost node: parent = hash(sibling || node)")
+            else:
+                # Normal left child with right sibling
+                node_hash = compute_rfc6962_parent(node_hash, sibling)
+                if verbose:
+                    logging.debug(f"  Left child: parent = hash(node || sibling)")
+        else:
+            # Node index is odd - right child
+            # Sibling is on the left
+            node_hash = compute_rfc6962_parent(sibling, node_hash)
+            if verbose:
+                logging.debug(f"  Right child: parent = hash(sibling || node)")
+        
+        if verbose:
+            logging.debug(f"  sibling (hex): {sibling.hex()}")
+            logging.debug(f"  parent  (b64): {base64.b64encode(node_hash).decode()}\n")
+        
+        # Move to parent level
+        node_index //= 2
+        last_node_index //= 2
+    
+    return node_hash    

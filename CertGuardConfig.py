@@ -50,6 +50,7 @@ class Config:
         self.restricted_roots  = cfg["controlled_roots"]["restricted_roots"]
         self.prohibited_roots  = cfg["controlled_roots"]["prohibited_roots"]
         self.verify_signatures = cfg["sct_config"]["verify_signatures"]
+        self.verify_inclusion  = cfg["sct_config"]["verify_inclusion"]
         self.country_list      = [country.upper() for country in cfg["country_filtering"]["country_list"]]
         self.blocklist         = [country.upper() for country in cfg["country_filtering"]["blocklist"]]
 

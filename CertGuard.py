@@ -226,8 +226,8 @@ def get_root_cert(chain: Sequence[x509.Certificate], root_store: Sequence[x509.C
     logging.info(f"LEAF cert CDP value(s):              {cdp}")  #  This eventually needs moved to its own check...  #######################
     logging.warning(f"LEAF cert subject:                   {server_chain[0].subject.rfc4514_string()}")
     logging.info(f"LEAF cert issuer:                    {server_chain[0].issuer.rfc4514_string()}")
-    logging.info(f"LEAF cert not valid before:          {server_chain[0].not_valid_before_utc}")
-    logging.info(f"LEAF cert not valid after:           {server_chain[0].not_valid_after_utc}")
+    logging.info(f"LEAF cert not valid before UTC:      {server_chain[0].not_valid_before_utc}")
+    logging.info(f"LEAF cert not valid after UTC:       {server_chain[0].not_valid_after_utc}")
     logging.debug(f"LEAF cert serial number:            {server_chain[0].serial_number}")
     logging.debug(f"LEAF cert fingerprint:              {(server_chain[0].fingerprint(hashes.SHA256())).hex()}")
 
@@ -728,18 +728,34 @@ def sct_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, 
     violations = []
     # Print out SCT details for debugging purposes
     for i, sct in enumerate(scts, 1):
-        logging.debug(f"\nSCT #{i}:")
+        logging.debug("\n")
+        logging.debug(f"SCT #{i}")
         for k, v in sct.items():
             logging.debug(f"  {k}: {v}")
+        if sct["extension_bytes"] != '':
+            logging.warning('  SCT extensions found')
+            sct_extension = bytes.fromhex(sct["extension_bytes"])
+
         
         # Validate SCT digital signatures (if enabled)
         if CONFIG.verify_signatures:
-            validated = verify_SCTs.validate_signature(cert, issuer_cert, sct, i)
+            validated, leaf_struct = verify_SCTs.validate_signature(cert, issuer_cert, sct)
             if not validated:
+                logging.error(f"SCT signature #{i} FAILED to validate!")
                 violations.append(f'⛔ Digital signature validation for <a href=https://certificate.transparency.dev/howctworks/ target="_blank">SCT</a> #{i} failed!')
+            else:
+                logging.info(f" SCT #{i} digital signature verified")
 
-    # Make call to SSLMate to check for cert/precert inclusion in Certificate Transparency log(s)
-    found, revoked,error = verify_SCTs.check_ctlog_inclusion(flow, cert)
+        # Cryptographically audit CT log inclusion (if enabled)
+        if CONFIG.verify_inclusion:
+            included, error = verify_SCTs.verify_inclusion(leaf_struct, sct["ct_log_url"], sct["timestamp_unix"], sct["ct_log_mmd"])
+            if included:
+                logging.info(f" Inclusion in {sct["ct_log_description"]} verified")    
+            else:
+                violations.append(f'⚠️ {error}')
+
+    # Make call to SSLMate to check for cert revocation and cert/precert inclusion in Certificate Transparency log(s)
+    found, revoked,error = verify_SCTs.ctlog_quick_check(flow, cert)
 
     if error:
         logging.error(f'Could not check for Certificate Transparency inclusion: {error}.')
@@ -751,7 +767,7 @@ def sct_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, 
         logging.info(f'Leaf cert not_valid_before date (UTC): {not_before}')
         now = datetime.now(timezone.utc)
         if now - timedelta(hours=24) < not_before <= now:
-            # TODO - Because I'm relying on SSLMate for CRL/OCSP verification at the moment, certs not published to CT logs won't be checked for revocation...
+            # TODO - Because I'm currently relying on SSLMate for CRL/OCSP verification, certs not published to CT logs won't be checked for revocation...
             logging.info('Cert is within Maximum Merge Delay (MMD) window for publishing to Certificate Transparency log.')
             return ErrorLevel.INFO, f'<span style="color: blue;">&nbsp🛈</span>&nbsp&nbspCert not found in CT logs, but within 24hr <a href=https://datatracker.ietf.org/doc/html/rfc6962#section-3 target="_blank">Maximum Merge Delay</a> period.'
         elif not_before > now:
@@ -777,14 +793,14 @@ def expiry_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLeve
     """Check if any certificate in the chain is expired."""
     logging.warning("-----------------------------------Entering expiry_check()----------------------------------------")
 
-    # Build full chain (leaf → root)
+    # Build full cert chain from leaf to root
     cert_chain = [cert_to_x509(cert) for cert in flow.server_conn.certificate_list] + [root]
     now = datetime.now(timezone.utc)
     chain_length = len(cert_chain)
     expired = []
 
     for i, cert in enumerate(cert_chain, start=1):
-        not_after = cert.not_valid_after.replace(tzinfo=timezone.utc)
+        not_after = cert.not_valid_after_utc
         if now > not_after:
             cn_attrs = cert.subject.get_attributes_for_oid(x509.NameOID.COMMON_NAME)
             cn = cn_attrs[0].value if cn_attrs else cert.subject.rfc4514_string()

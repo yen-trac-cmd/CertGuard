@@ -48,7 +48,9 @@ class Config:
         self.exempt_eTLDs      = cfg["caa_exceptions"]["exempt_eTLDs"]
         self.filtering_mode    = cfg["country_filtering"]["filtering_mode"].lower()  # "allow" or "warn"
         self.restricted_roots  = cfg["controlled_roots"]["restricted_roots"]
+        self.revocation_checks = cfg["tls_config"]["revocation_checks"]
         self.prohibited_roots  = cfg["controlled_roots"]["prohibited_roots"]
+        self.quick_check       = cfg["sct_config"]["quick_check"]
         self.verify_signatures = cfg["sct_config"]["verify_signatures"]
         self.verify_inclusion  = cfg["sct_config"]["verify_inclusion"]
         self.country_list      = [country.upper() for country in cfg["country_filtering"]["country_list"]]

@@ -15,10 +15,12 @@ import certifi
 import dns.resolver
 import logging                          # Valid levels = debug, info, warning, error, critical, fatal.  
 import os
+import revocation_logic
 import sqlite3
 import sys
 import uuid
 import verify_SCTs
+
 
 CONFIG = Config()
 BYPASS_PARAM = "CertGuard-Token"
@@ -173,25 +175,6 @@ def verify_signature(subject: x509.Certificate, issuer: x509.Certificate) -> Non
     else:
         raise TypeError(f"Unsupported public key type: {type(pub)}")
 
-def get_cdp(cert: x509.Certificate) -> list[x509.CRLDistributionPoints]:
-    crl_urls = []
-    try:
-        crl_dp_extension = cert.extensions.get_extension_for_class(
-            x509.CRLDistributionPoints
-        )
-    except x509.ExtensionNotFound:
-        logging.warning(f'No CRL Distribution Point found in cert!')
-        return crl_urls
-
-    crl_value=crl_dp_extension.value
-    for distribution_point in crl_value:
-        if not distribution_point.full_name:
-            continue
-        for general_name in distribution_point.full_name:
-            if isinstance(general_name, x509.UniformResourceIdentifier):
-                crl_urls.append(general_name.value)   
-    return crl_urls
-
 def get_root_cert(chain: Sequence[x509.Certificate], root_store: Sequence[x509.Certificate]) -> Tuple[Optional[x509.Certificate], Optional[str]]:
     """
     Given a mitmproxy https flow.server_conn.certificate_list, attempt to resolve and verify the root CA certificate for the server's certificate chain.
@@ -205,6 +188,7 @@ def get_root_cert(chain: Sequence[x509.Certificate], root_store: Sequence[x509.C
             root_cert: matched root cert from root_store, or None if no match.
             identifier: CN (preferred) or full RFC 4514 subject string of the matched root cert, or None if no root identified.
     """
+    logging.warning(f"-----------------------------------Entering get_root_cert()------------------------------------------")
     # Convert mitmproxy Cert object to cryptography.x509.Certificate
     server_chain = [cert_to_x509(cert) for cert in chain]
     
@@ -214,44 +198,53 @@ def get_root_cert(chain: Sequence[x509.Certificate], root_store: Sequence[x509.C
     for issuer, subject in zip(server_chain[1:], server_chain[:-1]):
         try:
             verify_signature(subject, issuer)
-            logging.info(f"Initial chain verification successful.")
+            logging.info(f"Signature verification for {subject.subject.rfc4514_string()} successful.")
         except Exception as e:
             logging.critical(f"Initial chain verification failed between '{subject.subject.rfc4514_string()}' and '{issuer.subject.rfc4514_string()}': {e}")
             logging.critical(f"Aborting further verification attempts.")
             return None, None
             
-    # Verify last cert in chain against a trusted root anchors 
-    cdp=get_cdp(server_chain[0])                                #  This eventually needs moved to its own check...  ###########
-    logging.info(f'Length of presented chain:       {len(server_chain)}')
-    logging.info(f"LEAF cert CDP value(s):              {cdp}")  #  This eventually needs moved to its own check...  #######################
-    logging.warning(f"LEAF cert subject:                   {server_chain[0].subject.rfc4514_string()}")
-    logging.info(f"LEAF cert issuer:                    {server_chain[0].issuer.rfc4514_string()}")
-    logging.info(f"LEAF cert not valid before UTC:      {server_chain[0].not_valid_before_utc}")
-    logging.info(f"LEAF cert not valid after UTC:       {server_chain[0].not_valid_after_utc}")
-    logging.debug(f"LEAF cert serial number:            {server_chain[0].serial_number}")
-    logging.debug(f"LEAF cert fingerprint:              {(server_chain[0].fingerprint(hashes.SHA256())).hex()}")
-
+    # If using self-signed cert...
     if len(server_chain) == 1:
-        return None, server_chain[0].issuer.rfc4514_string()
+        self_signed = server_chain[0].issuer.rfc4514_string()
+        logging.error(f'Self-signed certificate; Subject = {self_signed}')
+        return None, self_signed
 
-    issuer_cert = server_chain[1]
+    logging.info(f'Length of presented chain:       {len(server_chain)}')
+    labels = ["LEAF cert", "Issuing CA", "Subordinate CA"]
+
+    for i, cert in enumerate(server_chain):
+        # Label selection logic
+        if i == 0:
+            label = "LEAF cert"
+        elif cert.subject == cert.issuer:
+            label = "Root cert"
+        elif i == 1:
+            label = "Issuing CA"
+        else:
+            label = f"Subordinate CA #{i-1}" if i > 2 else "Subordinate CA"
+        
+        fields = {
+            "Subject": cert.subject.rfc4514_string(),
+            "Issuer": cert.issuer.rfc4514_string(),
+            "Serial number": cert.serial_number,
+            "Serial number (hex)": hex(cert.serial_number),
+            "Not valid before UTC": cert.not_valid_before_utc,
+            "Not valid after UTC": cert.not_valid_after_utc,
+            "Fingerprint (SHA256)": cert.fingerprint(hashes.SHA256()).hex(),
+        }
+        
+        # Compute padding width (based on longest field name)
+        max_key_len = max(len(k) for k in fields)
+        pad = max_key_len + 2
+
+        logging.warning(f"{label}:")
+        for key, value in fields.items():
+            prefix = f"  {key + ':':<{pad}}"
+            logging.info(f"{prefix}{value}")
+
+    # Verify last cert in chain against a trusted root anchors 
     last_cert = server_chain[-1]
-
-    if len(server_chain) > 1:
-        logging.warning(f"Issuing CA Subject:                  {issuer_cert.subject.rfc4514_string()}")
-        logging.info(f"Issuing CA Issuer:                   {issuer_cert.issuer.rfc4514_string()}")
-        logging.debug(f"Issuing CA serial number:           {issuer_cert.serial_number}")
-        logging.info(f"Issuing CA not valid before UTC:     {issuer_cert.not_valid_before_utc}")
-        logging.info(f"Issuing CA not valid after UTC:      {issuer_cert.not_valid_after_utc}")
-        logging.debug(f"Issuing CA fingerprint:             {(issuer_cert.fingerprint(hashes.SHA256())).hex()}")
-    if len(server_chain) > 2:
-        logging.warning(f"Subordinate CA Subject:              {last_cert.subject.rfc4514_string()}")
-        logging.info(f"Subordinate CA Issuer:               {last_cert.issuer.rfc4514_string()}")
-        logging.debug(f"Subordinate CA serial number:       {last_cert.serial_number}")
-        logging.info(f"Subordinate CA not valid before UTC: {last_cert.not_valid_before_utc}")
-        logging.info(f"Subordinate CA not valid after UTC:  {last_cert.not_valid_after_utc}")
-        logging.debug(f"Subordinate CA fingerprint:         {(last_cert.fingerprint(hashes.SHA256())).hex()}")
-
     for root in root_store:
         if root.subject == last_cert.issuer:
             try:
@@ -714,6 +707,8 @@ def sct_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, 
     logging.warning(f"-----------------------------------Entering sct_check()--------------------------------------------------")
     cert   = cert_to_x509(flow.server_conn.certificate_list[0])
     issuer_cert = cert_to_x509(flow.server_conn.certificate_list[1])
+    warnings = []
+    violations = []
     logging.info(f'Input cert: {cert.subject.rfc4514_string()}')
     logging.debug(f'Issuer cert: {issuer_cert.subject.rfc4514_string()}')
     
@@ -725,7 +720,6 @@ def sct_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, 
         violation = '⚠️ Certificate missing <a href=https://certificate.transparency.dev/howctworks/ target="_blank">Signed Certificate Timestamps</a> (SCTs)'
         return ErrorLevel.ERROR, violation
     
-    violations = []
     # Print out SCT details for debugging purposes
     for i, sct in enumerate(scts, 1):
         logging.debug("\n")
@@ -735,66 +729,93 @@ def sct_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, 
         if sct["extension_bytes"] != '':
             logging.warning('  SCT extensions found')
             sct_extension = bytes.fromhex(sct["extension_bytes"])
-
         
         # Validate SCT digital signatures (if enabled)
         if CONFIG.verify_signatures:
-            validated, leaf_struct = verify_SCTs.validate_signature(cert, issuer_cert, sct)
-            if not validated:
+            validated, error, leaf_struct = verify_SCTs.validate_signature(cert, issuer_cert, sct)
+            if error:
+                logging.error(f"Error during SCT validation attempt for SCT #{i}: {error}")
+                warnings.append(f'⚠️ Encountered error trying to validate SCT #{i}: {error}')
+            elif not validated:
                 logging.error(f"SCT signature #{i} FAILED to validate!")
-                violations.append(f'⛔ Digital signature validation for <a href=https://certificate.transparency.dev/howctworks/ target="_blank">SCT</a> #{i} failed!')
+                violations.append(f'⛔ Digital signature validation for <a href=https://certificate.transparency.dev/howctworks/ target="_blank">SCT</a> #{i} failed.')
             else:
                 logging.info(f" SCT #{i} digital signature verified")
 
         # Cryptographically audit CT log inclusion (if enabled)
-        if CONFIG.verify_inclusion:
+        if validated and CONFIG.verify_inclusion:
             included, error = verify_SCTs.verify_inclusion(leaf_struct, sct["ct_log_url"], sct["timestamp_unix"], sct["ct_log_mmd"])
             if included:
                 logging.info(f" Inclusion in {sct["ct_log_description"]} verified")    
             else:
-                violations.append(f'⚠️ {error}')
+                warnings.append(f'⚠️ {error}')
 
-    # Make call to SSLMate to check for cert revocation and cert/precert inclusion in Certificate Transparency log(s)
-    found, revoked,error = verify_SCTs.ctlog_quick_check(flow, cert)
-
-    if error:
-        logging.error(f'Could not check for Certificate Transparency inclusion: {error}.')
-        return ErrorLevel.FATAL, f'{error}'
-    if found:
-        logging.info(f'Publication in Certificate Transparency log confirmed.')
-    else:
-        not_before = cert.not_valid_before_utc
-        logging.info(f'Leaf cert not_valid_before date (UTC): {not_before}')
-        now = datetime.now(timezone.utc)
-        if now - timedelta(hours=24) < not_before <= now:
-            # TODO - Because I'm currently relying on SSLMate for CRL/OCSP verification, certs not published to CT logs won't be checked for revocation...
-            logging.info('Cert is within Maximum Merge Delay (MMD) window for publishing to Certificate Transparency log.')
-            return ErrorLevel.INFO, f'<span style="color: blue;">&nbsp🛈</span>&nbsp&nbspCert not found in CT logs, but within 24hr <a href=https://datatracker.ietf.org/doc/html/rfc6962#section-3 target="_blank">Maximum Merge Delay</a> period.'
-        elif not_before > now:
-            logging.info("Certificate is not valid yet (Not Before timestamp is in the future)!")
-            violations.append(f'⛔ Certificate not yet valid! Issue date: {not_before} ')
-        else:
-            logging.info("Certificate has been valid for more than 24 hours and should be published in CT logs by now.")
-        logging.warning('Leaf cert NOT FOUND in CT log!')
-        violations.append('⛔ Certificate not logged in <a href=https://certificate.transparency.dev/howctworks/ target="_blank">Certificate Transparency</a> log')
-
-    if not revoked:
-        logging.info('Certificate not revoked.')
-    elif revoked:
-        logging.error(f"Leaf cert for '{flow.request.pretty_host}' REVOKED!\n                      Reason code: {revoked}")
-        violations.append(f'⛔ Certificate marked as revoked at {revoked}')
-    
     if violations:
-        return ErrorLevel.FATAL, f'{"<br>".join(violations)}' 
+        return ErrorLevel.FATAL, f'{"<br>".join(violations, warnings)}' 
+    
+    if warnings:
+        return ErrorLevel.ERROR, f'{"<br>".join(warnings)}'
 
     return ErrorLevel.NONE, None
 
+def sct_quick_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, Optional[str]]:
+    # Make call to SSLMate to check for cert revocation and cert/precert inclusion in Certificate Transparency log(s)
+    logging.warning(f"-----------------------------------Entering sct_quick_check()--------------------------------------------------")
+
+    if not CONFIG.quick_check:
+        return ErrorLevel.NONE, None
+    else:
+        violations = []
+        cert   = cert_to_x509(flow.server_conn.certificate_list[0])
+        found, revoked, error = verify_SCTs.ctlog_quick_check(flow, cert)
+
+        if error:
+            logging.error(f'Could not check SSLMate for Certificate Transparency inclusion: {error}.')
+            return ErrorLevel.ERROR, f'{error}'
+
+        if found:
+            logging.info(f'Publication in Certificate Transparency log confirmed.')
+        else:
+            not_before = cert.not_valid_before_utc
+            logging.info(f'Leaf cert not_valid_before date (UTC): {not_before}')
+            now = datetime.now(timezone.utc)
+            if now - timedelta(hours=24) < not_before <= now:
+                # TODO - Because I'm currently relying on SSLMate for CRL/OCSP verification, certs not published to CT logs won't be checked for revocation...
+                logging.info('Cert is within Maximum Merge Delay (MMD) window for publishing to Certificate Transparency log.')
+                return ErrorLevel.INFO, f'<span style="color: blue;">&nbsp🛈</span>&nbsp&nbspCert not found in CT logs, but within 24hr <a href=https://datatracker.ietf.org/doc/html/rfc6962#section-3 target="_blank">Maximum Merge Delay</a> period.'
+
+            elif not_before > now:
+                logging.info("Certificate is not valid yet (Not Before timestamp is in the future)!")
+                violations.append(f'⛔ Certificate not yet valid! Issue date: {not_before} ')
+
+            else:
+                logging.info("Certificate has been valid for more than 24 hours and should be published in CT logs by now.")
+            logging.warning('Leaf cert NOT FOUND in CT log!')
+            violations.append('⛔ Certificate not logged in <a href=https://certificate.transparency.dev/howctworks/ target="_blank">Certificate Transparency</a> log')
+
+        if not revoked:
+            logging.info('Certificate not revoked.')
+        elif revoked:
+            logging.error(f"Leaf cert for '{flow.request.pretty_host}' REVOKED!\n                      Reason code: {revoked}")
+            violations.append(f'⛔ Certificate marked as revoked at {revoked}')
+        
+        if violations:
+            return ErrorLevel.FATAL, f'{"<br>".join(violations)}' 
+
+        return ErrorLevel.NONE, None
+
 def expiry_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, Optional[str]]:
+
     """Check if any certificate in the chain is expired."""
     logging.warning("-----------------------------------Entering expiry_check()----------------------------------------")
 
-    # Build full cert chain from leaf to root
-    cert_chain = [cert_to_x509(cert) for cert in flow.server_conn.certificate_list] + [root]
+    # Build cert chain provided by server
+    cert_chain = [cert_to_x509(cert) for cert in flow.server_conn.certificate_list] 
+    
+    # Add root cert to complete the chain, provided that it's not already supplied in the chain.
+    if not cert_chain[-1].subject == cert_chain[-1].issuer:
+        cert_chain.append(root)
+
     now = datetime.now(timezone.utc)
     chain_length = len(cert_chain)
     expired = []
@@ -809,6 +830,7 @@ def expiry_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLeve
             expired.append((i, cn, expiry))
 
     if not expired:
+        logging.debug('No expired certs found in cert chain.')
         return ErrorLevel.NONE, None
 
     def label_for_position(pos: int) -> str:
@@ -828,11 +850,30 @@ def expiry_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLeve
     error_message = f'⚠️ Expired certificate(s) identified:<br>{"<br>".join(violations)}'
     return ErrorLevel.CRIT, error_message   
 
+def revocation_checks(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, Optional[str]]:
+    # Build cert chain provided by server
+    cert_chain = [cert_to_x509(cert) for cert in flow.server_conn.certificate_list] 
+    
+    # Add root cert to complete the chain, provided that it's not already supplied in the chain.
+    if not cert_chain[-1].subject == cert_chain[-1].issuer:
+        cert_chain.append(root)
+   
+    is_revoked, error = revocation_logic.check_cert_chain_revocation(cert_chain)
+    if is_revoked:
+        logging.error(f'One or more certificates REVOKED!')
+        violation = f"⛔ One or more certs in chain marked as REVOKED:{error}"
+        return ErrorLevel.CRIT, violation
+
+    if not error:
+        return ErrorLevel.NONE, None
+
+    return ErrorLevel.INFO, error
+
 def identity_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, Optional[str]]:
     """Check if any certificate in the chain lacks a subject, or if the leaf cert lacks a SAN."""
     logging.warning("-----------------------------------Entering identity_check()----------------------------------------")
 
-    # Build full chain (leaf → root)
+    # Build full cert chain from leaf to root
     cert_chain = [cert_to_x509(cert) for cert in flow.server_conn.certificate_list] + [root]
     chain_length = len(cert_chain)
     violations = []
@@ -879,6 +920,7 @@ def identity_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLe
                 violations.append(f'&emsp;&emsp;▶ {label} <code>{cn}</code> missing Subject Alternative Name (SAN).')
 
     if not violations:
+        logging.debug('Cert identity checks completed successfully.')
         return ErrorLevel.NONE, None
 
     error_message = f'⚠️ Identity issue(s) found in certificate chain:<br>{"<br>".join(violations)}'
@@ -892,8 +934,12 @@ pending_requests = {}
 # Load Certifi roots + any custom roots
 root_store = get_root_store()
 
-# Load Certificate Transparency 
-ct_log_map = verify_SCTs.load_ct_log_list()
+# Load Certificate Transparency, optionally passing in legacy CT log file.
+if os.path.exists("./resources/legacy_log.json"):
+    ct_log_map = verify_SCTs.load_ct_log_list(old_ct_log='./resources/legacy_log.json')
+else:
+    ct_log_map = verify_SCTs.load_ct_log_list()
+
 if ct_log_map == None:
     logging.fatal('Can not load Certificate Transparency log_list.json file!  Please check DNS resolution and Internet connectivity.')
 
@@ -922,11 +968,13 @@ def request(flow: http.HTTPFlow) -> None:
     if not cert_chain:
         logging.info(f'Unencrypted connection; skipping further checks.')
         return
-    logging.debug(f'Cert chain provided by the server: {cert_chain}')
+    #logging.debug(f'Cert chain provided by the server: {cert_chain}')
 
     leaf_cert = cert_chain[0]
-    logging.debug(f'The leaf cert is: {leaf_cert.cn} =-.')
-    logging.debug(f' ---> The SubAltName(s) are {leaf_cert.altnames}')
+    #logging.debug(f'The leaf cert is: {leaf_cert.cn} =-.')
+    logging.debug(f'---> Cert SubAltName(s):        {[name.value for name in leaf_cert.altnames]}')
+
+    ### Insert test here for self-signed???  or let get_root_cert handle it and return an attribute...
 
     # Retrieve validated root cert as cryptography.hazmat.bindings._rust.x509.Certificate object.
     root_cert, claimed_root = get_root_cert(cert_chain, root_store)
@@ -1003,7 +1051,19 @@ def request(flow: http.HTTPFlow) -> None:
         "body": flow.request.content
     }
 
-    my_checks = [root_country_check, controlled_CA_checks, example_check, expiry_check, identity_check, verify_cert_caa, prior_approval_check, sct_check]  # 
+    my_checks = [
+        root_country_check, 
+        controlled_CA_checks, 
+        example_check, 
+        expiry_check, 
+        revocation_checks, 
+        identity_check, 
+        verify_cert_caa, 
+        prior_approval_check, 
+        sct_check, 
+        sct_quick_check,
+    ] 
+
     violations=[]
     for check in my_checks:
         error, violation = check(flow, root_cert)

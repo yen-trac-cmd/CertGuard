@@ -7,4 +7,3 @@ __pycache__/
 custom_roots/
 *.db
 *.log
-audit_path_verification.py

@@ -80,10 +80,19 @@ min_tls_version = 1.2
 # Cipher Suites names documented at https://www.iana.org/assignments/tls-parameters/tls-parameters.xhtml#tls-parameters-4.
 ciphersuites = "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256:TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256:TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384:TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384:TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256:TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256:TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA:TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA:TLS_RSA_WITH_AES_128_GCM_SHA256:TLS_RSA_WITH_AES_256_GCM_SHA384:TLS_RSA_WITH_AES_128_CBC_SHA:TLS_RSA_WITH_AES_256_CBC_SHA"  # Same ciphersuites as Chrome 140.0.7339.208.
 
+# Enable 'revocation_checks' to check for certificate revocation against CRL and/or OCSP servers (depending on the CDP and AIA information parsed from cert).
+revocation_checks = true
+
+
 [sct_config]
+# Enable 'quick_check' to query SSLMate for certificate revocation and inclusion in Certificate Transparency logs.
+# Note: Without a paid SSLMate Certificate Search API subscription, calls to the API may return HTTP 503 - Service Unavailable errors
+# during times of high system load.
+quick_check = false
+
 # Set verify_signatures to true to locally validate the ECDSA digital signature of all returned Signed Certificate Timestamps (SCTs).
 verify_signatures = true
 
-# Enabling 'verify_inclusion' instructs CertGuard to retrieve an audit proof from RFC6962-compliant CT log servers and perform a full Merkle tree reconstruction against the latest 
-# Signed Tree Head (STH).  This provides a cryptographic guarantee that the leaf certificate was fully logged by the CT server.
+# Enabling 'verify_inclusion' instructs CertGuard to retrieve an inclusion proof from RFC6962-compliant CT log servers and perform a full Merkle tree reconstruction against the 
+# latest Signed Tree Head (STH).  This provides a cryptographic guarantee that the leaf certificate was fully logged by the CT server.
 verify_inclusion = true

@@ -1,6 +1,7 @@
 import base64
 import datetime
 import hashlib
+import json
 import logging  
 import os
 import requests
@@ -52,9 +53,15 @@ class RevocationReason(IntEnum):
     def _missing_(cls, value: int):
         return cls.unknown
 
-def load_ct_log_list() -> dict:
+def load_ct_log_list(old_ct_log=None) -> dict:
     """
     Loads Google's well-known CT log list and transforms it into a dictionary of CT log entry metadata, keyed by log_id_bytes.
+
+    Args:
+        old_ct_log: Optionally specify a filepath for a legacy copy of the Certificate Transparency log file for testing purposes against older certs.
+
+    Returns:
+        mapping:    A transformed dictionary that can be used by subsequent SCT verification functions.
     """
     
     session = CachedSession('./resources/ct_log_list.json', expire_after=timedelta(hours=24), backend="filesystem", stale_if_error=True, allowable_codes=[200])
@@ -78,35 +85,44 @@ def load_ct_log_list() -> dict:
     if ct_log_list.from_cache:
         logging.debug('Certificate Transparency log list retreived from cache.')
 
-    log_list = ct_log_list.json()
+    log_lists = [ct_log_list.json()]
+
+    if old_ct_log:
+        try:
+            with open(old_ct_log, "r", encoding="utf-8") as f:
+                old_log = json.load(f)
+                log_lists.append(old_log)
+        except Exception as e:
+            logging.error(f"Failed to load legacy CT log list: {e}")
 
     # Transform log_list mapping
     mapping = {}
-    for operator in log_list.get("operators", []):
-        for entry in operator.get("logs", []):
-            key_b64 = entry.get("key")
-            log_id_b64 = entry.get("log_id")
-            if not key_b64 or not log_id_b64:
-                continue
+    for log_list in log_lists:
+        for operator in log_list.get("operators", []):
+            for entry in operator.get("logs", []):
+                key_b64 = entry.get("key")
+                log_id_b64 = entry.get("log_id")
+                if not key_b64 or not log_id_b64:
+                    continue
 
-            try:
-                # Remove whitespace/linebreaks and extend 'entry' to include log operator name and public key in DER format.
-                key_b64 = "".join(key_b64.split())
-                log_id_b64 = "".join(log_id_b64.split())
+                try:
+                    # Remove whitespace/linebreaks and extend 'entry' to include log operator name and public key in DER format.
+                    key_b64 = "".join(key_b64.split())
+                    log_id_b64 = "".join(log_id_b64.split())
 
-                pubkey_der = base64.b64decode(key_b64)
-                log_id_bytes = base64.b64decode(log_id_b64)
+                    pubkey_der = base64.b64decode(key_b64)
+                    log_id_bytes = base64.b64decode(log_id_b64)
 
-                pubkey = serialization.load_der_public_key(pubkey_der, backend=default_backend())
-                entry["pubkey"] = pubkey
-                entry["operator_name"] = operator.get("name")
+                    pubkey = serialization.load_der_public_key(pubkey_der, backend=default_backend())
+                    entry["pubkey"] = pubkey
+                    entry["operator_name"] = operator.get("name")
 
-                # Return 'mapping' dictionary, keyed by the base64-decoded bytes of the original 'log_id' value for the CT Log.
-                mapping[log_id_bytes] = entry
+                    # Return 'mapping' dictionary, keyed by the base64-decoded bytes of the original 'log_id' value for the CT Log.
+                    mapping[log_id_bytes] = entry
 
-            except Exception as e:
-                logging.error(f"Failed to load log public key; exception: {e}")
-                continue
+                except Exception as e:
+                    logging.error(f"Failed to load log public key; exception: {e}")
+                    continue
 
     return mapping
 
@@ -208,9 +224,10 @@ def extract_scts(flow: http.HTTPFlow, cert: x509.Certificate, ct_log_map) -> lis
             "ct_log_state": ct_log_entry.get("state") if ct_log_entry else None,
             "ct_log_temporal_interval": ct_log_entry.get("temporal_interval") if ct_log_entry else None,
         })
+        
     return sct_data
 
-def validate_signature(cert: x509.Certificate, issuer_cert: x509.Certificate, sct: dict) -> tuple[bool, bytes | None]:
+def validate_signature(cert: x509.Certificate, issuer_cert: x509.Certificate, sct: dict) -> tuple[bool, str, bytes | None]:
     """
     Validate ECDSA digital signature on a Signed Certificate Timestamp (SCT)
     Code adapted from https://research.ivision.com/how-does-certificate-transparency-work.html.
@@ -222,10 +239,12 @@ def validate_signature(cert: x509.Certificate, issuer_cert: x509.Certificate, sc
 
     Returns:
         bool:  True/False result indicating if the digital signature was verified (or not)
+        error:   Error message if unable to retrieve CT log server's public key.
         bytes: The 'sct_data' structure that forms the basis of the Merkle tree leaf and SCT signature.
-        None:  Returned if validation fails for any reason
+        None:  Returned if validation fails.
     """
     #TODO Add support for PKCS#1 v1.5 signatures
+    logging.warning(f"-----------------------------------Entering validate_signature()--------------------------------------------------")
     timestamp = bytes.fromhex(hex(round(sct["timestamp"].replace(tzinfo=datetime.timezone.utc).timestamp() * 1000))[2:].zfill(16))
     issuer_public_key_hash = hashlib.sha256(issuer_cert.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)).digest()
     sct_extension = bytes.fromhex(sct["extension_bytes"])                          # To support future leaf_index extension by static CT API logs
@@ -246,7 +265,7 @@ def validate_signature(cert: x509.Certificate, issuer_cert: x509.Certificate, sc
     # Check to ensure CT Log server public key was mapped into CT Log Map
     if sct["ct_log_key"] == None:
         logging.error(f'Could not identify Certificate Transparency log server public key.')
-        return False, None
+        return False, f"Couldn't find CT log public key.", None
     
     # Loads public key of CT log server
     pubkey = load_der_public_key(base64.b64decode(sct["ct_log_key"]))
@@ -254,12 +273,12 @@ def validate_signature(cert: x509.Certificate, issuer_cert: x509.Certificate, sc
     try:
         # Validates SCT signature against sct_data structure constructed above
         pubkey.verify(bytes.fromhex(sct["signature"]), sct_data, ec.ECDSA(hashes.SHA256()))
-        return True, sct_data
+        return True, None, sct_data
     except exceptions.InvalidSignature:
-        return False, None
+        return False, None, None
         
 def ctlog_quick_check(flow: http.HTTPFlow, leaf_cert: x509.Certificate) -> Tuple[bool, bool, Optional[str]]:
-    logging.warning(f"-----------------------------------Entering check_ctlog_inclusion()--------------------------------------------------")
+    logging.warning(f"-----------------------------------Entering ctlog_quick_check()--------------------------------------------------")
     leaf_cert_sha256 = leaf_cert.fingerprint(hashes.SHA256()).hex()
     leaf_precert_tbs_sha256 = hashlib.sha256(leaf_cert.tbs_precertificate_bytes).hexdigest()
     
@@ -288,7 +307,9 @@ def ctlog_quick_check(flow: http.HTTPFlow, leaf_cert: x509.Certificate) -> Tuple
     found = False
     revoked = False
     headers = {"Authorization": "Bearer " + SSLMATE_KEY}
-    
+    last_error = None
+    records = None 
+
     while True:
         query = f'{SSLMATE_QUERY_URL}?domain={target_fqdn}&expand=revocation'
         if after is not None:
@@ -304,17 +325,27 @@ def ctlog_quick_check(flow: http.HTTPFlow, leaf_cert: x509.Certificate) -> Tuple
                 break
 
             except requests.exceptions.HTTPError as error:
-                logging.error(f'SSLMate query attempt #{attempt+1} failed: {error}.  Retrying in {delay}s...')
+                body = error.response.text if error.response is not None else '<no response body>'
+                last_error = f'{error.response.status_code} - {error.response.reason}'
+
+                logging.error(
+                    f'SSLMate query attempt #{attempt+1} failed: {last_error}.\n'
+                    f'Retrying in {delay}s...'
+                )
                 time.sleep(delay)
                 delay *=2
             except Exception as e:
+                last_error = e
                 logging.error(f'Unknown error occurred: {e}.  Retrying in {delay}s...')
                 time.sleep(delay)
                 delay *=2
         
-        if records == False:
-            logging.error(f'Unable to query SSLMate for {flow.request.pretty_host}; FAILING CLOSED!')
-            return found, revoked, f'Error encountered attempting to query SSLMate {e} '  # False, False, error
+        if records == None:
+            logging.error(
+                f'Unable to query SSLMate for {flow.request.pretty_host}\n'
+                f'{body}'
+            )
+            return found, revoked, f'⚠️ Error encountered attempting to query SSLMate: <b>{last_error}</b>'  # False, False, error
 
         # SSLMate truncates responses at 100 records per request, so if less than 100 records are returned it indicates the end of the recordset.
         # ...Otherwise append an "&after=xxxx" query parameter (where xxxx is the last record ID number from the previous recordset) to retrieve the next recordset.
@@ -370,8 +401,10 @@ def verify_inclusion(sct_data: bytes, ct_log_url: str, sct_timestamp: int, log_m
 
     Returns:
         bool: Returns True for successful inclusion verification using retrieved audit proof from the CT log.
+        str:  Error encountered during inclusion checking logic.
     """
-    REQUEST_TIMEOUT = 2.5  # seconds
+    logging.warning(f"-----------------------------------Entering verify_inclusion()--------------------------------------------------")
+    REQUEST_TIMEOUT = 2.75 # seconds
     sth_url = ct_log_url + 'ct/v1/get-sth'
     proof_url_template = ct_log_url + 'ct/v1/get-proof-by-hash?hash={}&tree_size={}'
 
@@ -385,17 +418,17 @@ def verify_inclusion(sct_data: bytes, ct_log_url: str, sct_timestamp: int, log_m
         sth_resp = requests.get(sth_url, timeout=REQUEST_TIMEOUT)
         sth_resp.raise_for_status()
     except requests.exceptions.Timeout:
-        logging.error("Timeout fetching STH.")
-        return False, "Timeout fetching STH."
+        logging.error("Timeout fetching CT STH.")
+        return False, "Timeout fetching CT Signed Tree Head."
     except requests.RequestException as e:
         logging.error(f"HTTP error fetching STH: {e}")
-        return False, f"HTTP error fetching STH: {e}"
+        return False, f"HTTP error fetching CT Signed Tree Head: {e}"
 
     try:
         sth = sth_resp.json()
     except ValueError:
         logging.error("Failed to decode STH JSON response.")
-        return False, "Failed to decode STH JSON response."
+        return False, "Failed to decode CT Signed Tree Head JSON response."
 
     tree_size = sth.get("tree_size")
     sth_root_b64 = sth.get("sha256_root_hash")
@@ -421,14 +454,14 @@ def verify_inclusion(sct_data: bytes, ct_log_url: str, sct_timestamp: int, log_m
         proof_resp.raise_for_status()
         proof = proof_resp.json()
     except requests.exceptions.Timeout:
-        logging.error("Timeout fetching inclusion proof. Try again later.")
-        return False, "Timeout fetching inclusion proof. Try again later."
+        logging.error("Timeout fetching CT inclusion proof. Try again later.")
+        return False, "Timeout fetching Certificate Transparency inclusion proof. Try again later."
     except requests.RequestException as e:
         logging.error(f"HTTP error fetching inclusion proof: {e}")
-        return False, f"HTTP error fetching inclusion proof: {e}"
+        return False, f"HTTP error fetching Certificate Transparency inclusion proof: {e}"
     except ValueError:
         logging.error("Failed to decode inclusion proof JSON.")
-        return False, "Failed to decode inclusion proof JSON."
+        return False, "Failed to decode Certificate Transparency inclusion proof JSON."
 
     # Validate proof fields
     if "leaf_index" not in proof or "audit_path" not in proof:
@@ -455,9 +488,6 @@ def verify_inclusion(sct_data: bytes, ct_log_url: str, sct_timestamp: int, log_m
         logging.error('Could not verify cert inclusion from audit proof; computed tree head hash mismatch.')
         return match, f'Mismatch for computed STH root.  Inclusion not guaranteed.'
     return match, None
-
-#def base64_to_bytes(s: str) -> bytes:
-#    return base64.b64decode(s)
 
 def compute_rfc6962_parent(left: bytes, right: bytes) -> bytes:
     """Compute RFC 6962 internal node hash (SHA256(0x01 || left || right))."""

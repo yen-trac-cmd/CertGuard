@@ -1,6 +1,8 @@
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
+from dns.resolver import dns
 from mitmproxy import certs
+import logging
 
 def supported_ciphers_list():
     # Read in https://testssl.sh/3.2/etc/cipher-mapping.txt and return list of both OpenSSL and IANA ciphersuite names.
@@ -39,3 +41,38 @@ def get_cert_domains(x509_cert: certs.Cert) -> list[str]:
         pass
 
     return list(domains)
+
+def is_zone_signed(domain):
+    logging.warning(f"===================================Entering is_zone_signed()========================================")
+    ######## will DNS *always* return SOA with any query for non-existent record?  If so, chase that.  ...If not, do devolution thing to get SOA.  ...THEN query for NS.
+    try:
+        ns_query = dns.resolver.query(domain, dns.rdatatype.NS)
+        logging.error(f'ns_query response when checking against "{domain}": {str(ns_query[0])}')
+
+        nameserver = str(ns_query[0])
+        logging.info(f"Authoritative nameserver '{nameserver}'' found for domain '{domain}'.")
+
+        # Query the authoritative nameserver for DNSKEY records to determine if zone is signed
+        nameserver_ip = dns.resolver.query(nameserver, dns.rdatatype.A)[0].to_text()
+        query_message = dns.message.make_query(domain, dns.rdatatype.DNSKEY, want_dnssec=True)
+        response = dns.query.udp(query_message, nameserver_ip)
+            
+        if response.answer and any(rrset.rdtype == dns.rdatatype.RRSIG for rrset in response.answer):
+            logging.info(f"The {domain} zone appears to be DNSSEC-signed (found RRSIG records).")
+            return True
+        else:
+            logging.info(f"The zone {domain} zone does NOT appear to be DNSSEC-signed (no RRSIG records found).")
+            return False
+                
+    except dns.resolver.NXDOMAIN:
+        logging.error(f"Error: The {domain} domain does not exist.")
+        return False
+    except dns.resolver.NoAnswer:
+        logging.error(f"Warning: No NS records found for '{domain}', or no DNSKEY records returned.")
+        return False
+    except dns.exception.Timeout:
+        logging.error(f"Error: DNS query for {domain} timed out.")
+        return False
+    except Exception as e:
+        logging.error(f"An unexpected error occurred: {e}")
+        return False

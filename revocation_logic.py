@@ -9,7 +9,7 @@ from helper_functions import cert_to_x509
 import logging
 from typing import Tuple, Optional
 
-def check_cert_chain_revocation(cert_chain: list, timeout: int = 10) -> Tuple[bool, str, Optional[int], Optional[str], Optional[str]]:
+def check_cert_chain_revocation(cert_chain: list, skip_leaf: bool, timeout: int = 10) -> Tuple[bool, str, Optional[int], Optional[str], Optional[str]]:
     """
     Check if any certificate in a chain has been revoked using CRL and/or OCSP.
     
@@ -36,14 +36,17 @@ def check_cert_chain_revocation(cert_chain: list, timeout: int = 10) -> Tuple[bo
     for i in range(len(cert_chain) - 1):
         cert = cert_chain[i]
         issuer = cert_chain[i + 1] if i + 1 < len(cert_chain) else None
-        cn = ""
-        
-        # Get certificate common name for error messages
+
+        # Get certificate common name for logging messages
         try:
             cn = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
-            #subject = cert.subject.rfc4514_string()
         except Exception:
             cn = ""
+        
+        if skip_leaf and i == 0:
+            logging.debug(f"Valid stapled OCSP response for {cn} found; skipping further revocation checks for leaf cert.")
+            continue
+        #cn = ""
         
         is_revoked, error, reason, method = check_cert_revocation(cert, issuer, timeout)
         
@@ -253,7 +256,7 @@ def _check_ocsp(cert: x509.Certificate, issuer_cert: x509.Certificate, ocsp_urls
             if ocsp_resp.response_status == ocsp.OCSPResponseStatus.SUCCESSFUL:
                 logging.debug("The OCSP request was successful.")
             elif ocsp_resp.response_status == ocsp.OCSPResponseStatus.UNAUTHORIZED:
-                logging.error("The OCSP responder is unauthorized to respond; skipping server.")
+                logging.error(f"The OCSP responder is unauthorized to respond for check against {cert.subject.rfc4514_string()}; skipping server.")
                 continue
             elif ocsp_resp.response_status == ocsp.OCSPResponseStatus.MALFORMED_REQUEST:
                 logging.error("The OCSP request was malformed; skipping server.")

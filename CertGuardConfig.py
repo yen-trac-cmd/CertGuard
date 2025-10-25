@@ -1,7 +1,7 @@
 import dns.resolver
 import json
 import ipaddress
-import logging                          # Valid levels = debug, info, warning, error, critical, fatal.  
+import logging
 import sys
 import tomllib
 from collections import deque

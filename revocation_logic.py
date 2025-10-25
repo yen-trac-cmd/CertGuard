@@ -131,7 +131,6 @@ def check_cert_revocation(cert: x509.Certificate, issuer_cert: Optional[x509.Cer
     error_msg = "<br>".join(errors) if errors else "Unable to verify revocation status"
     return (False, error_msg, None, None)
 
-
 def _get_crl_revocation_reason(revoked_cert) -> Optional[str]:
     """Extract revocation reason from a RevokedCertificate object."""
 
@@ -199,7 +198,6 @@ def _get_ocsp_urls(cert: x509.Certificate) -> list:
     except x509.ExtensionNotFound:
         return []
 
-
 def _get_crl_urls(cert: x509.Certificate) -> list:
     """Extract CRL URLs from certificate's CRL Distribution Points (CDP) extension."""
     try:
@@ -217,7 +215,6 @@ def _get_crl_urls(cert: x509.Certificate) -> list:
         return urls
     except x509.ExtensionNotFound:
         return []
-
 
 def _check_ocsp(cert: x509.Certificate, issuer_cert: x509.Certificate, ocsp_urls: list, timeout: int ) -> Tuple[Optional[bool], Optional[str]]:
     """
@@ -277,7 +274,10 @@ def _check_ocsp(cert: x509.Certificate, issuer_cert: x509.Certificate, ocsp_urls
                 
                 if single_resp.certificate_status == ocsp.OCSPCertStatus.REVOKED:
                     logging.debug(f" - Revocation Time:     {single_resp.revocation_time_utc}")
-                    logging.debug(f" - Revocation Reason:   {single_resp.revocation_reason}")
+                    if single_resp.revocation_reason:
+                        logging.debug(f" - Revocation Reason:   {single_resp.revocation_reason}")
+                    else:
+                        logging.debug(" - Revocation Reason:   Unspecified")
 
             # Log response metadata
             if ocsp_resp.responder_key_hash:
@@ -285,14 +285,16 @@ def _check_ocsp(cert: x509.Certificate, issuer_cert: x509.Certificate, ocsp_urls
             if ocsp_resp.responder_name:
                 logging.debug(f" - Responder Name:      {ocsp_resp.responder_name}")
             logging.debug(f" - Produced At:         {ocsp_resp.produced_at_utc}")
-            logging.debug(f" - Signature Algorithm: {ocsp_resp.signature_hash_algorithm.name}")
+            logging.debug(f" - Signature Hash Algo: {ocsp_resp.signature_hash_algorithm.name}")
 
             
             # Log any extensions
             if ocsp_resp.extensions:
-                logging.debug("Extensions:")
+                logging.debug(" Extensions:")
                 for ext in ocsp_resp.extensions:
                     logging.debug(f"  - {ext.oid._name}: {ext.value}")
+            else:
+                logging.debug(" - OCSP Extensions:     (None found)")
 
             cert_status = ocsp_resp.certificate_status
             if cert_status == ocsp.OCSPCertStatus.GOOD:

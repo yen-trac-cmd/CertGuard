@@ -28,7 +28,7 @@ except:
     logging.fatal("Please define the 'SSLMATE_KEY' environment variable with your API key from SSLMate.com.")
 
 SSLMATE_QUERY_URL = "https://api.certspotter.com/v1/issuances"
-CT_LOG_LIST_URL   = "https://www.gstatic.com/ct/log_list/v3/log_list.json"     # Google's CT Log list
+CT_LOG_LIST_URL   = "https://www.gstatic.com/ct/log_list/v3/log_list.json"     # Google's authoritative CT Log list
 
 class RevocationReason(IntEnum):
     def __new__(cls, value: int, description: str):
@@ -178,11 +178,21 @@ def parse_ct_extensions(ext_bytes: bytes) -> dict:
 
     return parsed
 
-def extract_scts(flow: http.HTTPFlow, cert: x509.Certificate, ct_log_map) -> list[dict]:
-    logging.warning(f"-----------------------------------Entering extract_scts()--------------------------------------------------")
-    # LIMITATION: The code only extracts SCTs embedded inside X.509 certs. Additional extraction logic is 
-    # necessary to account for SCTs delivered via OCSP stapling or TLS extension during session negotiation.  
+def extract_scts(cert: x509.Certificate, ct_log_map) -> list[dict]:
+    """
+    Extract and return Signed Certificate Timestamps (SCTs) from supplied x.509 Certificate along with CT log server metadata
 
+    Args:
+        cert:       x509 TLS certificate from which to extract SCT
+
+    Returns:
+        sct_data:   A list of dictionaries that represent SCT data extracted or derived from the provided certificate.
+
+    LIMITATION: This function only extracts SCTs embedded inside X.509 certs. Additional extraction logic would be 
+    necessary to account for SCTs delivered via the 'signed_certificate_timestamp' TLS extension or as extensions within a stapled OCSP
+    (e.g. 'certificate_status') response during TLS session negotiation, but as of 2025 usage of these methods appears to be exceedingly rare.
+    """
+    logging.warning(f"-----------------------------------Entering extract_scts()--------------------------------------------------")
     try:
         ext = cert.extensions.get_extension_for_oid(ExtensionOID.PRECERT_SIGNED_CERTIFICATE_TIMESTAMPS)
     except x509.ExtensionNotFound:
@@ -195,9 +205,9 @@ def extract_scts(flow: http.HTTPFlow, cert: x509.Certificate, ct_log_map) -> lis
         #logging.info(f"SCT log_id {count} (hex): {sct.log_id.hex()}")
         logging.info(f"SCT log_id {count} (b64): {base64.b64encode(sct.log_id).decode()}")
 
-    if ct_log_map == None:
-        error = f"<html><head><title>Error!</title></head><body>Could not load Certificate Transparency log file from {CT_LOG_LIST_URL}!"
-        flow.repsonse = http.Response.make(500, error, {"Content-Type": "text/html"})
+    #if ct_log_map == None:
+    #    error = f"<html><head><title>Error!</title></head><body>Could not load Certificate Transparency log file from {CT_LOG_LIST_URL}!"
+    #    flow.repsonse = http.Response.make(500, error, {"Content-Type": "text/html"})
 
     sct_data = []
     for sct in scts:
@@ -277,7 +287,18 @@ def validate_signature(cert: x509.Certificate, issuer_cert: x509.Certificate, sc
     except exceptions.InvalidSignature:
         return False, None, None
         
-def ctlog_quick_check(flow: http.HTTPFlow, leaf_cert: x509.Certificate) -> Tuple[bool, bool, Optional[str]]:
+def ctlog_quick_check(flow: http.HTTPFlow, leaf_cert: x509.Certificate) -> Tuple[bool, bool | str, Optional[str]]:
+    """
+    Performs efficient Certificate Transparency log inclusion & cert revocation check by querying SSLMate's Certificate Search API.
+
+    Args:
+        flow:       mitmproxy HTTP flow from which to extract the target FQDN
+        leaf_cert:  x509 Certificate to match against SSLMate objects
+    Returns:
+        found:      Boolean to indicate if cert was found in SSLMate's database
+        revoked:    Returns False if cert hasn't been rovked, or a revocation reason if cert has been revoked
+        [str]:      Error message if unable to query SSLMate
+    """
     logging.warning(f"-----------------------------------Entering ctlog_quick_check()--------------------------------------------------")
     leaf_cert_sha256 = leaf_cert.fingerprint(hashes.SHA256()).hex()
     leaf_precert_tbs_sha256 = hashlib.sha256(leaf_cert.tbs_precertificate_bytes).hexdigest()

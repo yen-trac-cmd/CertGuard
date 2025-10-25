@@ -1,19 +1,27 @@
-from mitmproxy import tls, ctx, http
+from mitmproxy import tls, ctx #, http
 from mitmproxy.addons.tlsconfig import TlsConfig
-from OpenSSL import SSL, crypto
+from OpenSSL import SSL #, crypto
 from cryptography.x509 import ocsp
 from cryptography.hazmat.primitives import serialization
 from cryptography import x509
-from cryptography.exceptions import InvalidSignature
 
 class OCSPStaplingConfig(TlsConfig):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.failed_domains = set()
         # Temporary storage keyed by connection ID until we can attach to flow
         self.ocsp_by_connection = {}
+        self.ocsp_sct_list={}
     
-    def tls_start_server(self, tls_start: tls.TlsData):
+    def load(self, loader):
+        """Called when the addon is loaded"""
+        # Ensure attributes exist even if __init__ had issues
+        if not hasattr(self, 'ocsp_by_connection'):
+            self.ocsp_by_connection = {}
+        if not hasattr(self, 'failed_domains'):
+            self.failed_domains = set()
+
+    def tls_start_server(self, tls_start: tls.TlsData) -> None:
         # Let the parent class set up the connection first
         ctx.log.info('===================================BEGIN New TLS negotiation============================================')
         super().tls_start_server(tls_start)
@@ -30,7 +38,7 @@ class OCSPStaplingConfig(TlsConfig):
             ssl_ctx = tls_start.ssl_conn.get_context()
             
             # Create callback to receive OCSP response
-            def ocsp_callback(conn, ocsp_data, user_data):
+            def ocsp_callback(conn, ocsp_data, user_data) -> bool:
                 """Callback to receive OCSP response from server"""
                 try:
                     if ocsp_data:
@@ -58,7 +66,7 @@ class OCSPStaplingConfig(TlsConfig):
                     ctx.log.error(f"[OCSP] Callback error: {e}")
                     return True
             
-            # Set the OCSP callback
+           # Set the OCSP callback
             ssl_ctx.set_ocsp_client_callback(ocsp_callback)
             
             # Rebuild the SSL.Connection with the modified context
@@ -79,7 +87,7 @@ class OCSPStaplingConfig(TlsConfig):
             self.failed_domains.add(sni)
             # Don't re-raise - let the connection proceed without OCSP
     
-    def tls_handshake_error(self, data: tls.TlsData):
+    def tls_handshake_error(self, data: tls.TlsData) -> None:
         """Called when TLS handshake fails"""
         sni = data.conn.sni or str(data.conn.address[0])
         
@@ -87,7 +95,7 @@ class OCSPStaplingConfig(TlsConfig):
             self.failed_domains.add(sni)
             ctx.log.warn(f"[OCSP] TLS handshake failed for {sni}, disabling OCSP for this domain")
     
-    def parse_and_validate_ocsp_response(self, ocsp_data: bytes, sni: str, cert_chain, conn_id):
+    def parse_and_validate_ocsp_response(self, ocsp_data: bytes, sni: str, cert_chain, conn_id) -> None:
         """Parse, validate signature, and display OCSP response details"""
         try:
             # Parse OCSP response using cryptography library
@@ -115,9 +123,16 @@ class OCSPStaplingConfig(TlsConfig):
                     ctx.log.error(f"[OCSP] Signature validation: FAILED")
                 
                 # Get certificate status
-                cert_status = ocsp_resp.certificate_status.name
-                ctx.log.info(f"[OCSP] Certificate Status: {cert_status}")
-                
+                ctx.log.info(f"[OCSP] Certificate Status: {ocsp_resp.certificate_status.name}")
+
+                # Check revocation reason if revoked
+                if ocsp_resp.certificate_status == ocsp.OCSPCertStatus.REVOKED:
+                    ctx.log.info(f"[OCSP] Revocation Time: {ocsp_resp.revocation_time_utc}")
+                    if ocsp_resp.revocation_reason:
+                        ctx.log.info(f"[OCSP] Revocation Reason: {ocsp_resp.revocation_reason.name}")
+                    else:
+                        ctx.log.info(f"[OCSP] Revocation Reason: Unspecified")
+
                 # Get timestamps
                 ctx.log.info(f"[OCSP] This Update: {ocsp_resp.this_update_utc}")
                 if ocsp_resp.next_update_utc:
@@ -130,27 +145,61 @@ class OCSPStaplingConfig(TlsConfig):
                 # Get responder information
                 if ocsp_resp.responder_name:
                     ctx.log.info(f"[OCSP] Responder Name: {ocsp_resp.responder_name.rfc4514_string()}")
-                elif ocsp_resp.responder_key_hash:
+                if ocsp_resp.responder_key_hash:
                     ctx.log.info(f"[OCSP] Responder Key Hash: {ocsp_resp.responder_key_hash.hex()}")
                 
                 # Get hash algorithm
-                ctx.log.info(f"[OCSP] Hash Algorithm: {ocsp_resp.hash_algorithm.name}")
+                #ctx.log.info(f"[OCSP] Hash Algorithm: {ocsp_resp.hash_algorithm.name}")
                 
                 # Get signature algorithm
-                ctx.log.info(f"[OCSP] Signature Algorithm: {ocsp_resp.signature_hash_algorithm.name}")
+                ctx.log.info(f"[OCSP] Signature Hash Algorithm: {ocsp_resp.signature_hash_algorithm.name}")
+
+                # Check for extensions
+                try:
+                    extensions = ocsp_resp.extensions
+                    if extensions:
+                        ctx.log.info(f"[OCSP] Found {len(extensions)} extension(s)")
+                        for ext in extensions:
+                            ctx.log.info(f"[OCSP] Extension OID: {ext.oid.dotted_string} ({ext.oid._name if hasattr(ext.oid, '_name') else 'unknown'})")
+                            ctx.log.info(f"[OCSP] Extension Critical: {ext.critical}")
+                            
+                            # Check for Signed Certificate Timestamp (SCT) extension
+                            if ext.oid.dotted_string == "1.3.6.1.4.1.11129.2.4.5":           # OID for SCT List
+                                ctx.log.info(f"[OCSP] *** Signed Certificate Timestamp (SCT) Extension Found ***")
+                                try:
+                                    self.ocsp_by_connection[conn_id]["ocsp_contains_sct"] = True
+                                    sct_list = ext.value
+                                    ctx.log.info(f"[OCSP] SCT List contains {len(sct_list)} SCT(s)")
+
+                                    # Store sct_list for later parsing by CertGuard
+                                    self.ocsp_sct_list[conn_id] = sct_list
+                                    
+                                    # Log SCT values
+                                    for i, sct in enumerate(sct_list, 1):
+                                        ctx.log.info(f"[OCSP]   SCT #{i}:")
+                                        ctx.log.info(f"[OCSP]     Version: {sct.version.name}")
+                                        ctx.log.info(f"[OCSP]     Log ID: {sct.log_id.hex()}")
+                                        ctx.log.info(f"[OCSP]     Timestamp: {sct.timestamp}")
+                                        ctx.log.info(f"[OCSP]     Entry Type: {sct.entry_type.name}")
+                                except Exception as e:
+                                    ctx.log.warn(f"[OCSP] Could not parse SCT extension: {e}")
+                            else:
+                                # Try to display the extension value
+                                try:
+                                    ctx.log.info(f"[OCSP] Extension Value: {ext.value}")
+                                except Exception as e:
+                                    ctx.log.debug(f"[OCSP] Could not display extension value: {e}")
+                except AttributeError:
+                    ctx.log.debug("[OCSP] No extensions present in OCSP response")
+                except Exception as e:
+                    ctx.log.warn(f"[OCSP] Error parsing OCSP extensions: {e}")
                 
-                # Check revocation reason if revoked
-                if ocsp_resp.certificate_status == ocsp.OCSPCertStatus.REVOKED:
-                    ctx.log.info(f"[OCSP] Revocation Time: {ocsp_resp.revocation_time_utc}")
-                    if ocsp_resp.revocation_reason:
-                        ctx.log.info(f"[OCSP] Revocation Reason: {ocsp_resp.revocation_reason.name}")
-            
             ctx.log.info(f"[OCSP] ==========================================")
             
         except Exception as e:
             ctx.log.error(f"[OCSP] Error parsing OCSP response: {e}")
     
-    def validate_ocsp_signature(self, ocsp_resp, cert_chain):
+    def validate_ocsp_signature(self, ocsp_resp, cert_chain) -> bool:
         """Validate the OCSP response signature against the certificate chain"""
         try:
             # Convert PyOpenSSL certificate chain to cryptography certificates
@@ -208,7 +257,7 @@ class OCSPStaplingConfig(TlsConfig):
             ctx.log.error(f"[OCSP] Error validating OCSP signature: {e}")
             return False
     
-    def tls_established_server(self, data: tls.TlsData):
+    def tls_established_server(self, data: tls.TlsData) -> None:
         """Called after TLS handshake is complete"""
         sni = data.conn.sni or str(data.conn.address[0])
         conn_id = id(data.conn)

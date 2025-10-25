@@ -14,7 +14,7 @@ from tls_extensions import OCSPStaplingConfig
 from typing import Sequence, Optional, Tuple
 from urllib.parse import urlparse
 import certifi
-import logging                          # Valid levels = debug, info, warning, error, critical, fatal.  
+import logging  # Valid levels = debug, info, warning, error, critical, fatal.  
 import os
 import revocation_logic
 import sqlite3
@@ -602,7 +602,7 @@ def sct_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, 
     logging.debug(f'Issuer cert: {issuer_cert.subject.rfc4514_string()}')
     
     # Check for SCTs & extract data
-    scts = verify_SCTs.extract_scts(flow, cert, ct_log_map)
+    scts = verify_SCTs.extract_scts(cert, ct_log_map)
     if not scts:
         # TODO: Update code to account for external SCTs (e.g. delivered via OCSP or during TLS negotation).  Until then, this check cannot result in FATAL errors.
         logging.error(f"Cert for {flow.request.pretty_url} missing SCT(s)!")
@@ -747,13 +747,6 @@ def verify_cert_caa(flow: http.HTTPFlow, root: x509.Certificate) -> tuple[ErrorL
         return ErrorLevel.CRIT, f'⚠️ Certificate <a href=https://knowledge.digicert.com/solution/name-mismatch-in-web-browser target="_blank">name mismatch</a>; cert not valid for <code>{fqdn}</code>.' 
 
     logging.info(f' Checking CAA records for these domains = {check_domains}')
-
-    #################### call is_zoned_signed() from here against 'fqdn'??????????????
-    ############## Need to walk to SOA to check for DNSKEY against the entire zone???
-    ######### Or do I just want to know if the CAA record comes back with matching RRSIG record???  ...I think so.
-
-    #domain_signed = helper_functions.is_zone_signed(fqdn)
-    #logging.warning(f'DNS zone signed? {domain_signed}')
 
     results = {}
     for domain in check_domains:
@@ -929,12 +922,12 @@ def check_caa_per_domain(domain: str, ca_identifiers: list[str]) -> tuple[bool, 
 def test_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, Optional[str]]:
     # Modified example rule from mitmproxy documentation
     if "https://www.example.com/path" in flow.request.pretty_url:
-        logging.info("Triggered Test Auto-Response=-.")
+        logging.info("Triggered test_check().")
         violation = f'<span style="color: green;">&nbsp🛈</span>&nbsp&nbspExample URL accessed: <b>{flow.request.pretty_url}</b>.'
         return ErrorLevel.INFO, violation
     return ErrorLevel.NONE, None
 
-#====================================================================== Main control logic===================================================================
+#====================================================================== Main ===================================================================
 
 # Class to inject OCSP Stapling requests
 ocsp_addon = OCSPStaplingConfig()
@@ -968,12 +961,24 @@ def request(flow: http.HTTPFlow) -> None:
     if flow.server_conn:
         conn_id = id(flow.server_conn)
         if conn_id in ocsp_addon.ocsp_by_connection:
-            # Copy all OCSP data to flow metadata
+            # Copy OCSP strings to flow metadata
             flow.metadata.update(ocsp_addon.ocsp_by_connection[conn_id])
-            ctx.log.debug(f"[OCSP] Attached OCSP data to flow for {flow.request.pretty_host}")
+            logging.debug(f"[OCSP] Attached OCSP data to flow for {flow.request.pretty_host}")
+            
+            # Retrieve any SCT extensions attached to stapled OCSP responses
+            if ocsp_addon.ocsp_sct_list:
+                if conn_id in ocsp_addon.ocsp_sct_list:
+                    stapled_sct = ocsp_addon.ocsp_sct_list[conn_id]
+                    logging.debug(f"SCT extension found in stapled OCSP response: {stapled_sct}")
+                    del ocsp_addon.stapled_sct[conn_id]
+                    
+                    # Return during hunt for any website using stapled SCTs.
+                    violation = f'Found SCT in stapled OCSP response for <b>{flow.request.pretty_url}</b>.'
+                    return ErrorLevel.INFO, violation
+
             # Clean up temporary storage
             del ocsp_addon.ocsp_by_connection[conn_id]
-
+            
     logging.info('===================================BEGIN New Cert Verification============================================')
     is_main_page = is_navigation_request(flow, referer_header, accept_header)
     logging.info(f'====> New navigation request:    {is_main_page}')
@@ -992,6 +997,7 @@ def request(flow: http.HTTPFlow) -> None:
         return
 
     leaf_cert = cert_chain[0]
+    logging.error(type(leaf_cert))
     logging.debug(f'---> Leaf cert SubAltName(s):   {[name.value for name in leaf_cert.altnames]}')
 
     # Retrieve validated root cert as cryptography.hazmat.bindings._rust.x509.Certificate object.

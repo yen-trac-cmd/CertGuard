@@ -5,7 +5,6 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.x509 import ocsp
 from cryptography.x509.oid import NameOID
 from datetime import datetime, timezone
-from helper_functions import cert_to_x509
 import logging
 from typing import Tuple, Optional
 

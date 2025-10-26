@@ -1,6 +1,5 @@
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
-from dns.resolver import dns
 from mitmproxy import certs
 
 def supported_ciphers_list() -> list[str]:
@@ -12,13 +11,13 @@ def supported_ciphers_list() -> list[str]:
         ciphers = [cipher_name for line in f for cipher_name in line.split()[2:4]]
     return ciphers
 
-def cert_to_x509(cert: certs.Cert) -> x509.Certificate:
-    """ 
-    Convert a mitmproxy.certs.Cert or OpenSSL.crypto.X509 object into a cryptography.x509.Certificate.
-
-    """
-    pem_bytes = cert.to_pem()  # returns standard PEM
-    return x509.load_pem_x509_certificate(pem_bytes, default_backend())
+#def cert_to_x509(cert: certs.Cert) -> x509.Certificate:
+#    """ 
+#    Convert a mitmproxy.certs.Cert or OpenSSL.crypto.X509 object into a cryptography.x509.Certificate.
+#
+#    """
+#    pem_bytes = cert.to_pem()  # returns standard PEM
+#    return x509.load_pem_x509_certificate(pem_bytes, default_backend())
 
 def get_cert_domains(x509_cert: certs.Cert) -> list[str]:
     """

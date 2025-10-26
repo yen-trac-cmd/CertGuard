@@ -301,11 +301,15 @@ def ctlog_quick_check(flow: http.HTTPFlow, leaf_cert: x509.Certificate) -> Tuple
     """
     logging.warning(f"-----------------------------------Entering ctlog_quick_check()--------------------------------------------------")
     leaf_cert_sha256 = leaf_cert.fingerprint(hashes.SHA256()).hex()
-    leaf_precert_tbs_sha256 = hashlib.sha256(leaf_cert.tbs_precertificate_bytes).hexdigest()
-    
     logging.info(f'Leaf cert SHA256 fingerprint:   {leaf_cert_sha256}')
-    logging.debug(f'  - tbs_precertificate_bytes:   {base64.b64encode(leaf_cert.tbs_precertificate_bytes).decode()}')
-    logging.info(f'  - Leaf precert TBS SHA256:    {leaf_precert_tbs_sha256} ')
+    
+    try:
+        leaf_precert_tbs_sha256 = hashlib.sha256(leaf_cert.tbs_precertificate_bytes).hexdigest()
+        logging.debug(f'  - tbs_precertificate_bytes:   {base64.b64encode(leaf_cert.tbs_precertificate_bytes).decode()}')
+        logging.info(f'  - Leaf precert TBS SHA256:    {leaf_precert_tbs_sha256} ')
+    except ValueError as e:
+        leaf_precert_tbs_sha256 = None
+        logging.error(e)
 
     # Gets all FQDNs in cert (CN + SANs).  If present in cert, use FQDN from flow object for SSLMate query, otherwise use first FQDN in returned list.
     cert_domains = get_cert_domains(leaf_cert)    
@@ -393,6 +397,9 @@ def ctlog_quick_check(flow: http.HTTPFlow, leaf_cert: x509.Certificate) -> Tuple
         ]
 
         for candidate, expected, label in checks:
+            if candidate == None:
+                continue
+            
             if candidate == expected:
                 logging.info(f"Matching hash for {label} found")
                 found = True

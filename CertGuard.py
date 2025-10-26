@@ -4,11 +4,12 @@ from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519, ed448, dsa, padding
+from dane import DANETLSAValidator
 from datetime import datetime, timedelta, timezone
 from dns.rdtypes.ANY import CAA
 from dns.resolver import dns
 from error_screen import error_screen
-from helper_functions import cert_to_x509, get_cert_domains, supported_ciphers_list
+from helper_functions import get_cert_domains, supported_ciphers_list
 from mitmproxy import ctx, http, addonmanager
 from tls_extensions import OCSPStaplingConfig
 from typing import Sequence, Optional, Tuple
@@ -163,23 +164,19 @@ def is_navigation_request(flow: http.HTTPFlow, referer_header, accept_header) ->
     logging.info(f"Could not ascertain new browser navigation; returning False.")
     return False
 
-def get_root_cert(chain: Sequence[x509.Certificate], root_store: Sequence[x509.Certificate]) -> Tuple[Optional[x509.Certificate], Optional[str]]:
+def get_root_cert(server_chain: Sequence[x509.Certificate], root_store: Sequence[x509.Certificate]) -> Tuple[Optional[x509.Certificate], Optional[str]]:
     """
     Given a mitmproxy https flow.server_conn.certificate_list, attempt to resolve and verify the root CA certificate for the server's certificate chain.
 
     Args:
-        chain (Sequence): Ordered certificate chain presented by the server (leaf first, intermediates, and optionally a root cert), in the form of a 
-            mitmproxy flow.server_conn.certificate_list.
-        root_store (Sequence[x509.x509.Certificate]): List of trusted root certificates to match against.
+        chain (Sequence): Ordered x509 certificate chain presented by the server (leaf first, intermediates, and optionally a root cert)
+        root_store (Sequence[x509.Certificate]): List of trusted root certificates to match against.
     Returns:
         Tuple[Optional[x509.Certificate], Optional[str]]: (root_cert, identifier)
             root_cert: matched root cert from root_store, or None if no match.
             identifier: CN (preferred) or full RFC 4514 subject string of the matched root cert, or None if no root identified.
     """
     logging.warning(f"-----------------------------------Entering get_root_cert()------------------------------------------")
-    # Convert mitmproxy Cert object to cryptography.x509.Certificate
-    server_chain = [cert_to_x509(cert) for cert in chain]
-    
     logging.info(f'Number of certifi + custom trusted root CA entries: {len(root_store)}')
 
     # Verify each link in the chain, starting from leaf and working up to the last interemediate CA cert
@@ -237,8 +234,14 @@ def get_root_cert(chain: Sequence[x509.Certificate], root_store: Sequence[x509.C
         if root.subject == last_cert.issuer:
             try:
                 verify_signature(last_cert, root)
-                logging.warning(f'Chain verified against root CA:      {root.subject.rfc4514_string()}')
-                logging.info(f'Root cert fingerprint:               {(root.fingerprint(hashes.SHA256())).hex()}')
+                logging.warning('Chain verified against Root CA:')
+                logging.info  (f'  Subject:              {root.subject.rfc4514_string()}')
+                logging.info  (f'  Issuer:               {root.issuer.rfc4514_string()}')
+                logging.info  (f'  Serial number:        {root.serial_number}')
+                logging.info  (f'  Serial number (hex):  {hex(root.serial_number)}')
+                logging.info  (f'  Not valid before UTC: {root.not_valid_before_utc}')
+                logging.info  (f'  Not valid after UTC:  {root.not_valid_after_utc}')
+                logging.info  (f'  Fingerprint (SHA256): {(root.fingerprint(hashes.SHA256())).hex()}')
                 return root, None
             except Exception as e:
                 logging.fatal(f"Root CA cert verification failed: {e}")
@@ -401,7 +404,7 @@ def expiry_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLeve
     logging.warning("-----------------------------------Entering expiry_check()----------------------------------------")
 
     # Build cert chain provided by server
-    cert_chain = [cert_to_x509(cert) for cert in flow.server_conn.certificate_list] 
+    cert_chain = [cert.to_cryptography() for cert in flow.server_conn.certificate_list] 
     
     # Add root cert to complete the chain, provided that it's not already supplied in the chain.
     if not cert_chain[-1].subject == cert_chain[-1].issuer:
@@ -444,7 +447,7 @@ def expiry_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLeve
 def revocation_checks(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, Optional[str]]:
     """ Build cert chain provided by server """
     
-    cert_chain = [cert_to_x509(cert) for cert in flow.server_conn.certificate_list] 
+    cert_chain = [cert.to_cryptography() for cert in flow.server_conn.certificate_list] 
     
     # Add root cert to complete the chain, provided that it's not already supplied in the chain.
     if not cert_chain[-1].subject == cert_chain[-1].issuer:
@@ -460,7 +463,7 @@ def revocation_checks(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[Erro
     if is_revoked:
         logging.error(f'One or more certificates REVOKED!')
         violation = f"⛔ One or more certs in chain marked as REVOKED:{error}"
-        return ErrorLevel.CRIT, violation
+        return ErrorLevel.FATAL, violation
 
     if not error:
         return ErrorLevel.NONE, None
@@ -472,7 +475,7 @@ def identity_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLe
     logging.warning("-----------------------------------Entering identity_check()----------------------------------------")
 
     # Build full cert chain from leaf to root
-    cert_chain = [cert_to_x509(cert) for cert in flow.server_conn.certificate_list] + [root]
+    cert_chain = [cert.to_cryptography() for cert in flow.server_conn.certificate_list] + [root]
     chain_length = len(cert_chain)
     violations = []
 
@@ -594,8 +597,8 @@ def record_decision(host, decision, root_fingerprint) -> None:
 
 def sct_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, Optional[str]]:
     logging.warning(f"-----------------------------------Entering sct_check()--------------------------------------------------")
-    cert   = cert_to_x509(flow.server_conn.certificate_list[0])
-    issuer_cert = cert_to_x509(flow.server_conn.certificate_list[1])
+    cert   = flow.server_conn.certificate_list[0].to_cryptography()
+    issuer_cert = flow.server_conn.certificate_list[1].to_cryptography()
     warnings = []
     violations = []
     logging.info(f'Input cert: {cert.subject.rfc4514_string()}')
@@ -604,7 +607,8 @@ def sct_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, 
     # Check for SCTs & extract data
     scts = verify_SCTs.extract_scts(cert, ct_log_map)
     if not scts:
-        # TODO: Update code to account for external SCTs (e.g. delivered via OCSP or during TLS negotation).  Until then, this check cannot result in FATAL errors.
+        # TODO: Update code to account for external SCTs (e.g. delivered via OCSP or during TLS negotation).  Although these
+        # alternative SCT delivery methods are exceedingly rare, this check should not result in FATAL errors until those methods are added.
         logging.error(f"Cert for {flow.request.pretty_url} missing SCT(s)!")
         violation = '⚠️ Certificate missing <a href=https://certificate.transparency.dev/howctworks/ target="_blank">Signed Certificate Timestamps</a> (SCTs)'
         return ErrorLevel.ERROR, violation
@@ -648,14 +652,16 @@ def sct_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, 
     return ErrorLevel.NONE, None
 
 def ct_quick_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, Optional[str]]:
-    # Make call to SSLMate to check for cert/precert inclusion in Certificate Transparency log(s) and cert revocation.
+    """
+    Make call to SSLMate to check for cert/precert inclusion in Certificate Transparency log(s) and cert revocation.
+    """
     logging.warning(f"-----------------------------------Entering sct_quick_check()--------------------------------------------------")
 
     if not CONFIG.quick_check:
         return ErrorLevel.NONE, None
     else:
         violations = []
-        cert   = cert_to_x509(flow.server_conn.certificate_list[0])
+        cert   = flow.server_conn.certificate_list[0].to_cryptography()
         found, revoked, error = verify_SCTs.ctlog_quick_check(flow, cert)
 
         if error:
@@ -708,7 +714,7 @@ def verify_cert_caa(flow: http.HTTPFlow, root: x509.Certificate) -> tuple[ErrorL
     logging.warning(f"-----------------------------------Entering verify_cert_caa()---------------------------------------------")
 
     leaf = flow.server_conn.certificate_list[0]
-    x509_leaf = cert_to_x509(leaf)
+    x509_leaf = leaf.to_cryptography()
     
     orgs=[]
     for attr in x509_leaf.issuer.get_attributes_for_oid(x509.oid.NameOID.ORGANIZATION_NAME):
@@ -836,7 +842,7 @@ def check_caa_per_domain(domain: str, ca_identifiers: list[str]) -> tuple[bool, 
             if answers.flags & dns.flags.AD:   # Indicates a DNSSEC-validated resposne; dns.flags.AD = 32
                 logging.info(f'DNSSEEC validation successful (AD bit set in response).')
             else:
-                logging.fatal(f'DNSSEEC validation for {check_domain} failed.')
+                logging.warning(f'DNSSEEC validation for {check_domain} failed.')
 
         except Exception as e:
             logging.warning(f' Aborting further CAA checks due to exception: "{e}"')
@@ -919,8 +925,14 @@ def check_caa_per_domain(domain: str, ca_identifiers: list[str]) -> tuple[bool, 
     logging.warning(f'No published CAA record found; return true per RFC8659')
     return True, None, records_found # No CAA record founds; return true per RFC8659
 
+def dane_check(flow: http.HTTPFlow, root: x509.Certificate):
+    """Check for DANE TLSA records and, if found, validate server certificate per RFC 6698"""
+    logging.warning(f"-----------------------------------Entering dane_check()---------------------------------------------")
+    return ErrorLevel.NONE, None
+
 def test_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, Optional[str]]:
     # Modified example rule from mitmproxy documentation
+    logging.warning(f"-----------------------------------Entering test_check()---------------------------------------------")
     if "https://www.example.com/path" in flow.request.pretty_url:
         logging.info("Triggered test_check().")
         violation = f'<span style="color: green;">&nbsp🛈</span>&nbsp&nbspExample URL accessed: <b>{flow.request.pretty_url}</b>.'
@@ -931,7 +943,8 @@ def test_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel,
 
 # Class to inject OCSP Stapling requests
 ocsp_addon = OCSPStaplingConfig()
-addons = [ocsp_addon]
+dane_validator = DANETLSAValidator()
+addons = [ocsp_addon, dane_validator]
 
 approved_hosts = set()
 pending_requests = {}
@@ -995,15 +1008,16 @@ def request(flow: http.HTTPFlow) -> None:
     if not cert_chain:
         logging.info(f'Unencrypted connection; skipping further checks.')
         return
-
+    
     leaf_cert = cert_chain[0]
-    logging.error(type(leaf_cert))
     logging.debug(f'---> Leaf cert SubAltName(s):   {[name.value for name in leaf_cert.altnames]}')
 
+    # Convert chain certs to cryptography.x509.Certificate objects
+    cert_chain = [cert.to_cryptography() for cert in cert_chain]
+    
     # Retrieve validated root cert as cryptography.hazmat.bindings._rust.x509.Certificate object.
     root_cert, claimed_root = get_root_cert(cert_chain, root_store)
     if root_cert:
-        logging.warning(f'Successfully retreived CA Root:      {root_cert.subject.rfc4514_string()}')
         root_hash = (root_cert.fingerprint(hashes.SHA256())).hex()
     else:
         # Note: As currently constructed, this error cannot be anything less than FATAL since the 'Proceed Anyway' button won't work.
@@ -1086,6 +1100,7 @@ def request(flow: http.HTTPFlow) -> None:
         sct_check, 
         ct_quick_check,
         verify_cert_caa,
+        dane_check,
         test_check,
     ] 
 

@@ -1,6 +1,6 @@
-from mitmproxy import tls, ctx #, http
+from mitmproxy import tls, ctx
 from mitmproxy.addons.tlsconfig import TlsConfig
-from OpenSSL import SSL #, crypto
+from OpenSSL import SSL
 from cryptography.x509 import ocsp
 from cryptography.hazmat.primitives import serialization
 from cryptography import x509

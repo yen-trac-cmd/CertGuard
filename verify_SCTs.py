@@ -275,7 +275,7 @@ def validate_signature(cert: x509.Certificate, issuer_cert: x509.Certificate, sc
     # Check to ensure CT Log server public key was mapped into CT Log Map
     if sct["ct_log_key"] == None:
         logging.error(f'Could not identify Certificate Transparency log server public key.')
-        return False, f"Couldn't find CT log public key.", None
+        return False, f"<br>&emsp;&emsp;▶ Couldn't find metadata for CT log ID <code>{sct["log_id_b64"]}</code>.", None
     
     # Loads public key of CT log server
     pubkey = load_der_public_key(base64.b64decode(sct["ct_log_key"]))

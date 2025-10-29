@@ -88,7 +88,7 @@ revocation_checks = true
 # Enable 'quick_check' to query SSLMate for certificate revocation and inclusion in Certificate Transparency logs.
 # Note: Without a paid SSLMate Certificate Search API subscription, calls to the API may return HTTP 503 - Service Unavailable errors
 # during times of high system load.
-quick_check = true
+quick_check = false
 
 # Set verify_signatures to true to locally validate the ECDSA digital signature of all returned Signed Certificate Timestamps (SCTs).
 verify_signatures = true

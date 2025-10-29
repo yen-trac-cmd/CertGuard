@@ -654,14 +654,23 @@ def sct_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, 
 def ct_quick_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, Optional[str]]:
     """
     Make call to SSLMate to check for cert/precert inclusion in Certificate Transparency log(s) and cert revocation.
+    LIMITATION: SSLMate purges expired certificates, so if cert is expired this check is bypassed.
     """
     logging.warning(f"-----------------------------------Entering sct_quick_check()--------------------------------------------------")
 
     if not CONFIG.quick_check:
         return ErrorLevel.NONE, None
+
     else:
-        violations = []
         cert   = flow.server_conn.certificate_list[0].to_cryptography()
+        now = datetime.now(timezone.utc)
+        not_after = cert.not_valid_after_utc
+        
+        if now > not_after:
+            logging.info('Skipping SSLMate lookup since leaf certificate has expired.')
+            return ErrorLevel.NONE, None
+
+        violations = []
         found, revoked, error = verify_SCTs.ctlog_quick_check(flow, cert)
 
         if error:
@@ -673,9 +682,8 @@ def ct_quick_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLe
         else:
             not_before = cert.not_valid_before_utc
             logging.info(f'Leaf cert not_valid_before date (UTC): {not_before}')
-            now = datetime.now(timezone.utc)
+            
             if now - timedelta(hours=24) < not_before <= now:
-                # TODO - Because I'm currently relying on SSLMate for CRL/OCSP verification, certs not published to CT logs won't be checked for revocation...
                 logging.info('Cert is within Maximum Merge Delay (MMD) window for publishing to Certificate Transparency log.')
                 return ErrorLevel.INFO, f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;Cert not found in CT logs, but within 24hr <a href=https://datatracker.ietf.org/doc/html/rfc6962#section-3 target="_blank">Maximum Merge Delay</a> period.'
 
@@ -985,15 +993,19 @@ def request(flow: http.HTTPFlow) -> None:
                     logging.debug(f"SCT extension found in stapled OCSP response: {stapled_sct}")
                     del ocsp_addon.stapled_sct[conn_id]
                     
-                    # Return during hunt for any website using stapled SCTs.
+                    # Return during hunt for any website using stapled SCTs in OCSP response.
                     violation = f'Found SCT in stapled OCSP response for <b>{flow.request.pretty_url}</b>.'
                     return ErrorLevel.INFO, violation
 
+                    # TODO: If ever encounter real-life SCT in stapled OCSP response, add code to pass into 
+                    # verify_SCTs.py for signature validation & inclusion proofing.
+
             # Clean up temporary storage
             del ocsp_addon.ocsp_by_connection[conn_id]
-            
-    logging.info('===================================BEGIN New Cert Verification============================================')
+
+    # Check to see if page is a navigation request that can be cleanly intercepted
     is_main_page = is_navigation_request(flow, referer_header, accept_header)
+    logging.info(f'====> TLS version for server:    {flow.server_conn.tls_version}')
     logging.info(f'====> New navigation request:    {is_main_page}')
     logging.info(f'====> Request URL:               {flow.request.pretty_url}')
     logging.info(f'====> Method:                    {flow.request.method}')

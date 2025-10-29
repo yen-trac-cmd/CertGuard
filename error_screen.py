@@ -77,7 +77,7 @@ def error_screen(flow, token, color, violations, error_level):
           <title>CertGuard Warning!</title>
           <style>
             body         {{ margin:0; font-family:Arial, sans-serif; background:{bg}; color:#333; }}
-            .warning-box {{ max-width:650px; margin:10% auto; padding:30px; border:3px solid {errorlevel_color}; border-radius:12px; background:#fff; box-shadow:0 4px 12px rgba(0,0,0,0.15); }}
+            .warning-box {{ max-width:700px; margin:10% auto; padding:30px; border:3px solid {errorlevel_color}; border-radius:12px; background:#fff; box-shadow:0 4px 12px rgba(0,0,0,0.15); }}
             h1           {{ color:{errorlevel_color}; margin-top:0; }}
             p            {{ font-size:1.1em; line-height:1.6; }}
             a.std        {{}}

@@ -12,12 +12,38 @@ Requirements:
 """
 
 import hashlib
-from typing import Optional
+#from typing import Optional
 import dns.resolver
-import dns.dnssec
+#import dns.dnssec
+from dns import rdtypes
 from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
-from mitmproxy import ctx, http, certs, tls
+from cryptography.hazmat.primitives import serialization #, hashes
+from mitmproxy import ctx, tls  #, http, certs
+from enum import IntEnum
+
+class TLSA:
+    """
+    A container class for the enumerations defining a DANE TLSA record.
+    """
+
+    class Usage(IntEnum):
+        """Translates the numeric usage field of a TLSA record."""
+        PKIX_TA = 0
+        PKIX_EE = 1
+        DANE_TA = 2
+        DANE_EE = 3
+
+    class Selector(IntEnum):
+        """Translates the numeric selector field of a TLSA record."""
+        CERT = 0
+        SPKI = 1
+
+    class MatchingType(IntEnum):
+        """Translates the numeric matching-type field of a TLSA record."""
+        FULL = 0
+        SHA256 = 1
+        SHA512 = 2
+
 
 class DANETLSAValidator:
     """mitmproxy add-on for DANE TLSA validation."""
@@ -51,21 +77,8 @@ class DANETLSAValidator:
         if not data.context.server.address:
             return
 
-       ###################################################
-        # The upstream connection is stored in data.context.server
-        server_conn = data.context.server
-        chain = server_conn.certificate_list     # List of mitmproxy.certs.Cert objects (leaf first)
-        if not chain:
-            ctx.log.warn("Upstream sent no certs.")
-            return
-
-        cert = chain[0].to_cryptography()
-        ctx.log.info(f"Upstream Subject: {cert.subject.rfc4514_string()}")
-
-        ######################################################
-
         hostname = data.context.server.address[0]
-        ctx.log.info(f'Identified hostname as: {hostname}')
+        ctx.log.info(f'Identified hostname from mitmproxy data.context.server: {hostname}')
         port = data.context.server.address[1]
         
         # Get the server certificate
@@ -74,19 +87,22 @@ class DANETLSAValidator:
             ctx.log.debug(f"No certificate available for {hostname}")
             return
 
-        cert_der = conn.certificate_list[0].to_pem()
-        # cert_der is now PEM-formatted ASCII 'bytes' boject
+        cert = conn.certificate_list[0]
+        #x509_cert = cert.to_cryptography()
+        #ctx.log.info(f"Upstream Subject from cert: {x509_cert.subject.rfc4514_string()}")
+                
+        cert_pem = cert.to_pem()    # Convert cert into a 'bytes' object of the PEM-formatted / ASCII representation of the cert
 
         # Validate using DANE
         try:
-            result = self.validate_dane(hostname, port, cert_der)
+            result = self.validate_dane(hostname, port, cert_pem)
             
             if result == "valid":
                 self.stats["validated"] += 1
-                ctx.log.info(f"✓ DANE validation successful for {hostname}")
+                ctx.log.info(f"DANE validation successful for {hostname}")
             elif result == "no_tlsa":
                 self.stats["no_tlsa"] += 1
-                ctx.log.debug(f"No TLSA record found for {hostname}")
+                ctx.log.debug(f"DANE not in use for {hostname}")
             elif result == "dnssec_failed":
                 self.stats["dnssec_failed"] += 1
                 ctx.log.warn(f"DNSSEC validation failed for {hostname}")
@@ -101,7 +117,7 @@ class DANETLSAValidator:
         except Exception as e:
             ctx.log.error(f"Error during DANE validation for {hostname}: {e}")
     
-    def validate_dane(self, hostname: str, port: int, cert_der: bytes) -> str:
+    def validate_dane(self, hostname: str, port: int, cert_pem: bytes) -> str:
         """
         Validate certificate against TLSA records.
         
@@ -114,7 +130,8 @@ class DANETLSAValidator:
         ctx.log.warn(f"-----------------------------------Entering validate_dane()---------------------------------------------")
         # Construct TLSA query name: _port._tcp.hostname
         tlsa_name = f"_{port}._tcp.{hostname}"
-        
+        ctx.log.info(f'Querying for TLSA record {tlsa_name}')
+
         # Check cache
         cache_key = (hostname, port)
         if cache_key in self.cache:
@@ -123,7 +140,7 @@ class DANETLSAValidator:
             # Query for TLSA records
             try:
                 answer = self.resolver.resolve(tlsa_name, 'TLSA')
-                
+
                 # Check DNSSEC validation if required
                 if ctx.options.dane_require_dnssec:
                     if not self.verify_dnssec(answer):
@@ -131,9 +148,11 @@ class DANETLSAValidator:
                 
                 tlsa_records = [rr for rr in answer]
                 self.cache[cache_key] = tlsa_records
-                
+
+                #ctx.log.warn(f'tlsa_records list: {tlsa_records}')
+
             except dns.resolver.NXDOMAIN:
-                ctx.log.debug(f"No TLSA record for {tlsa_name}")
+                ctx.log.debug(f"TLSA resource record not found for {tlsa_name}")
                 return "no_tlsa"
             except dns.resolver.NoAnswer:
                 return "no_tlsa"
@@ -145,16 +164,16 @@ class DANETLSAValidator:
             return "no_tlsa"
         
         # Parse certificate
-        cert = x509.load_pem_x509_certificate(cert_der)
+        x509_cert = x509.load_pem_x509_certificate(cert_pem)
         
         # Validate against each TLSA record
         for tlsa in tlsa_records:
-            if self.check_tlsa_record(tlsa, cert, cert_der):
+            if self.check_tlsa_record(tlsa, x509_cert, cert_pem):
                 return "valid"
         
         return "failed"
     
-    def check_tlsa_record(self, tlsa, cert: x509.Certificate, cert_der: bytes) -> bool:
+    def check_tlsa_record(self, tlsa, cert: x509.Certificate, cert_pem: bytes) -> bool:
         """
         Check if certificate matches TLSA record.
         
@@ -164,15 +183,16 @@ class DANETLSAValidator:
         - matching_type (0-2): How to match (0=Exact data match, 1=SHA-256, 2=SHA-512)
         - cert_data: The certificate data to match (either full cert or SPKI)
         """
-        ctx.log.warn(f"-----------------------------------Entering check_tlsa_records()---------------------------------------------")
         usage = tlsa.usage
         selector = tlsa.selector
         matching_type = tlsa.mtype
-        cert_assoc_data = tlsa.cert
+        tlsa_cert_assoc_data = tlsa.cert
         
+        ctx.log.debug(f'Checking against TLSA record: {tlsa}')
+
         # Get the data to match based on selector
         if selector == 0:  # Full certificate
-            data = cert_der
+            data = cert_pem
         elif selector == 1:  # SubjectPublicKeyInfo
             data = cert.public_key().public_bytes(
                 encoding=serialization.Encoding.DER,
@@ -194,10 +214,14 @@ class DANETLSAValidator:
             return False
         
         # Compare
-        match = computed == cert_assoc_data
+        match = computed == tlsa_cert_assoc_data
         
         if match:
-            ctx.log.info(f"TLSA match: usage={usage}, selector={selector}, matching_type={matching_type}")
+            ctx.log.info(f"TLSA match: \n"
+                f"  - Certificate Usage:   {usage} ({TLSA.Usage(usage).name})\n" 
+                f"  - Selector:            {selector} ({TLSA.Selector(selector).name})\n"
+                f"  - Matching Type:       {matching_type} ({TLSA.MatchingType(matching_type).name})\n"
+                f"  - Matched Data:        {computed.hex()}")
         
         return match
     

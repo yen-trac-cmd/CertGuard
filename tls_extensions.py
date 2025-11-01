@@ -1,4 +1,4 @@
-#from cryptography.exceptions import InvalidSignature
+from CertGuardConfig import Config
 from mitmproxy import tls, ctx
 from mitmproxy.addons.tlsconfig import TlsConfig
 from OpenSSL import SSL
@@ -8,10 +8,13 @@ from revocation_logic import validate_ocsp_signature
 #from cryptography.hazmat.primitives.asymmetric import ec, ed25519, ed448, padding, rsa
 from cryptography import x509
 
+CONFIG = Config()
+
 class OCSPStaplingConfig(TlsConfig):
     def __init__(self) -> None:
         super().__init__()
         self.failed_domains = set()
+        
         # Temporary storage keyed by connection ID until we can attach to flow
         self.ocsp_by_connection = {}
         self.ocsp_sct_list={}
@@ -25,8 +28,12 @@ class OCSPStaplingConfig(TlsConfig):
             self.failed_domains = set()
 
     def tls_start_server(self, tls_start: tls.TlsData) -> None:
-        # Let the parent class set up the connection first
+        if not CONFIG.revocation_checks:
+            return
+        
         ctx.log.info('===================================BEGIN New TLS negotiation============================================')
+        
+        # Let the parent class set up the connection first
         super().tls_start_server(tls_start)
         
         sni = tls_start.conn.sni or str(tls_start.conn.address[0])
@@ -79,9 +86,7 @@ class OCSPStaplingConfig(TlsConfig):
             
             # Request OCSP stapling
             tls_start.ssl_conn.request_ocsp()
-            
             tls_start.ssl_conn.set_connect_state()
-            
             ctx.log.info(f"[OCSP] Requesting OCSP stapling for {sni}")
             
         except Exception as e:
@@ -204,6 +209,9 @@ class OCSPStaplingConfig(TlsConfig):
    
     def tls_established_server(self, data: tls.TlsData) -> None:
         """Called after TLS handshake is complete"""
+        
+        if not CONFIG.revocation_checks:
+            return
         sni = data.conn.sni or str(data.conn.address[0])
         conn_id = id(data.conn)
         if conn_id in self.ocsp_by_connection:

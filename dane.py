@@ -11,15 +11,34 @@ Requirements:
     pip install mitmproxy dnspython cryptography
 """
 
+import dns
+import dns.edns
+import dns.exception
+import dns.rcode    
+import dns.resolver
+import dns.message
+import dns.query
+
+#from dns.exception import DNSException
+#from dns.resolver import Answer
+#import dns.rcode
+#import dns.edns
+#import dns.dnssec
+#from dns.rcode import SERVFAIL
+#from dns.resolver import dns
+#from dns import rdtypes
+
 import hashlib
 #from typing import Optional
-import dns.resolver
-#import dns.dnssec
-from dns import rdtypes
+import logging
+from CertGuardConfig import Config
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization #, hashes
-from mitmproxy import ctx, tls  #, http, certs
+from error_screen import error_screen
+from mitmproxy import tls  #ctx, http, certs
 from enum import IntEnum
+
+CONFIG = Config()
 
 class TLSA:
     """
@@ -28,22 +47,21 @@ class TLSA:
 
     class Usage(IntEnum):
         """Translates the numeric usage field of a TLSA record."""
-        PKIX_TA = 0
-        PKIX_EE = 1
-        DANE_TA = 2
-        DANE_EE = 3
+        WebPKI_CA_Constraint = 0
+        WebPKI_EndEntity = 1
+        DANE_TrustAnchor = 2
+        DANE_EndEntity = 3
 
     class Selector(IntEnum):
         """Translates the numeric selector field of a TLSA record."""
-        CERT = 0
-        SPKI = 1
+        Full_Certificate = 0
+        Subject_PublicKey_Info = 1
 
     class MatchingType(IntEnum):
         """Translates the numeric matching-type field of a TLSA record."""
-        FULL = 0
+        Exact_Match = 0
         SHA256 = 1
         SHA512 = 2
-
 
 class DANETLSAValidator:
     """mitmproxy add-on for DANE TLSA validation."""
@@ -51,9 +69,14 @@ class DANETLSAValidator:
     def __init__(self):
         self.resolver = dns.resolver.Resolver()
         self.resolver.use_edns(0, dns.flags.DO, 4096)  # Enable DNSSEC
+
+        #TODO: Move resolver config to CertGuardConfig.py for both dane.py and CertGuard.py checks
+        self.resolver.nameservers = ['8.8.8.8']
+
         self.cache = {}
-        self.stats = {"validated": 0, "failed": 0, "no_tlsa": 0, "dnssec_failed": 0}
+        self.stats = {"validated": 0, "failed": 0, "no_tlsa": 0, "dns_failed": 0, "dnssec_failed": 0}
     
+    '''
     def load(self, loader):
         """Called when the add-on is loaded."""
         loader.add_option(
@@ -68,69 +91,84 @@ class DANETLSAValidator:
             default=False,
             help="Require DNSSEC validation for TLSA records"
         )
-        ctx.log.info("DANE TLSA Validator loaded")
-    
+        logging.info("DANE TLSA Validator loaded")
+    '''
+
     def tls_established_client(self, data: tls.TlsData):
         """Called when TLS is established with the upstream server."""
         
-        ctx.log.warn(f"===================================BEGIN DANE Check===================================================================")
+        logging.warning(f"===================================BEGIN DANE Check===================================================================")
         if not data.context.server.address:
             return
 
         hostname = data.context.server.address[0]
-        ctx.log.info(f'Identified hostname from mitmproxy data.context.server: {hostname}')
+        logging.info(f'Identified hostname from mitmproxy data.context.server: {hostname}')
         port = data.context.server.address[1]
         
         # Get the server certificate
         conn = data.context.server
         if not conn or not hasattr(conn, 'certificate_list') or not conn.certificate_list:
-            ctx.log.debug(f"No certificate available for {hostname}")
+            logging.debug(f"No certificate available for {hostname}")
             return
-
         cert = conn.certificate_list[0]
-        #x509_cert = cert.to_cryptography()
-        #ctx.log.info(f"Upstream Subject from cert: {x509_cert.subject.rfc4514_string()}")
-                
+               
         cert_pem = cert.to_pem()    # Convert cert into a 'bytes' object of the PEM-formatted / ASCII representation of the cert
 
         # Validate using DANE
         try:
             result = self.validate_dane(hostname, port, cert_pem)
             
+            self.dane_used = False
+            self.dnssec_failure = False
+            self.dane_failure = False
+
             if result == "valid":
+                self.dane_used = True
                 self.stats["validated"] += 1
-                ctx.log.info(f"DANE validation successful for {hostname}")
+                logging.info(f"DANE validation successful for {hostname}")
             elif result == "no_tlsa":
+                self.dane_used = False
                 self.stats["no_tlsa"] += 1
-                ctx.log.debug(f"DANE not in use for {hostname}")
+                logging.debug(f"DANE not in use for {hostname}")
+            elif result == "dns_failed":
+                self.stats["dns_failed"] += 1
             elif result == "dnssec_failed":
                 self.stats["dnssec_failed"] += 1
-                ctx.log.warn(f"DNSSEC validation failed for {hostname}")
-                if ctx.options.dane_enforce:
-                    data.conn.close()
-            else:  # failed
+                logging.warning(f"DNSSEC validation failed for {hostname}")
+                if CONFIG.require_dnssec:
+                    logging.error(f"DNSSEC validation failed for DANE TLSA record {hostname}.")
+                    self.violation = f'⛔ DNSSEC validation failed for DANE TLSA record.'
+                    self.dnssec_failure = True
+            else:
                 self.stats["failed"] += 1
-                ctx.log.error(f"DANE validation FAILED for {hostname}")
-                if ctx.options.dane_enforce:
-                    data.conn.close()
+                logging.error(f"DANE validation FAILED for {hostname}")
+                if CONFIG.enforce_dane:
+                    logging.error("DANE validation against published TLSA record failed; closing connection per configuration directive.")
+                    self.violation = f"⛔ DANE validation against published TLSA record failed."
+                    self.dane_failure = True
             
         except Exception as e:
-            ctx.log.error(f"Error during DANE validation for {hostname}: {e}")
+            logging.error(f"Error during DANE validation for {hostname}: {e}")
     
     def validate_dane(self, hostname: str, port: int, cert_pem: bytes) -> str:
         """
         Validate certificate against TLSA records.
-        
+        Args:
+            hostname:       FQDN from which to construct the TLSA DNS query
+            port:           TCP port used for HTTPS connection
+            cert_pem:       Server certificate in PEM-formatted bytes.
+
         Returns:
-            "valid": DANE validation successful
-            "failed": DANE validation failed
-            "no_tlsa": No TLSA record found
+            "valid":         DANE validation successful
+            "failed":        DANE validation failed
+            "no_tlsa":       No TLSA record found
+            "dns_failed":    Error encountered during DNS query
             "dnssec_failed": DNSSEC validation failed
         """
-        ctx.log.warn(f"-----------------------------------Entering validate_dane()---------------------------------------------")
+        logging.warning(f"-----------------------------------Entering validate_dane()---------------------------------------------")
         # Construct TLSA query name: _port._tcp.hostname
         tlsa_name = f"_{port}._tcp.{hostname}"
-        ctx.log.info(f'Querying for TLSA record {tlsa_name}')
+        logging.info(f'Querying for TLSA record {tlsa_name}')
 
         # Check cache
         cache_key = (hostname, port)
@@ -138,28 +176,153 @@ class DANETLSAValidator:
             tlsa_records = self.cache[cache_key]
         else:
             # Query for TLSA records
-            try:
-                answer = self.resolver.resolve(tlsa_name, 'TLSA')
+            query = dns.message.make_query(tlsa_name, 'TLSA', want_dnssec=True)
+            got_response = False
 
-                # Check DNSSEC validation if required
-                if ctx.options.dane_require_dnssec:
-                    if not self.verify_dnssec(answer):
-                        return "dnssec_failed"
-                
-                tlsa_records = [rr for rr in answer]
-                self.cache[cache_key] = tlsa_records
+            while got_response == False:
+                try:
+                    #TODO: Move resolver logic for both dane.py and CertGuard.py checks into helper_functions.py.
+                    current_resolver = CONFIG.resolvers[0]
+                    logging.debug(f'Using resolver: {current_resolver}')
+                    response = dns.query.udp_with_fallback(query, current_resolver, timeout=CONFIG.dns_timeout)
+                    got_response = True
+                except dns.exception.Timeout:
+                    CONFIG.resolvers.rotate(1)
+                    current_resolver = CONFIG.resolvers[0]
+                    logging.error(f'DNS query for "{tlsa_name}" using resolver {CONFIG.resolvers[-1]} exceeded timeout of {CONFIG.dns_timeout} seconds.')
+                    logging.error(f'  --> Trying again with resolver {current_resolver}.')
+                except Exception as e:
+                    CONFIG.resolvers.rotate(1)
+                    current_resolver = CONFIG.resolvers[0]
+                    logging.debug(f"Exception encountered for DNS query using resolver {CONFIG.resolvers[-1]}: {e}")
+                    logging.error(f'  --> Trying again with resolver {current_resolver}.')
 
-                #ctx.log.warn(f'tlsa_records list: {tlsa_records}')
+            if response[1]:
+                logging.warning(f'DNS query had to fallback to TCP due to truncated response')
+            response=response[0]
+            logging.debug(f'Full resource record set:\n{response.to_text()}')
 
-            except dns.resolver.NXDOMAIN:
-                ctx.log.debug(f"TLSA resource record not found for {tlsa_name}")
+            # Check DNSSEC validation 
+            if self.verify_dnssec(response):
+                validation_failed = False
+                logging.info(f'DNSSEEC response validation successful (Authenticated Data bit set in response).')
+            else:
+                validation_failed = True
+                logging.warning(f'Response data could not be validated by DNSSEC.')
+
+            # Check for RFC8914 EDNS Extended DNS Error (EDE) information, if present, to explain failure(s)
+            if response.options:
+                for opt in response.options:
+                    ede_errors=[]
+                    # Handle only EDE options
+                    if isinstance(opt, dns.edns.EDEOption):
+                        # Note: opt objects also expose discrete .code and .text attributes if needed for future logic.
+                        logging.warning(f"Encountered {opt}")
+                        ede_errors.append(opt)
+                        
+                        '''
+                        # Extract EDE information as defined in https://www.rfc-editor.org/rfc/rfc8914.html.
+                        if opt.code == 0:
+                            logging.warning(f"Other/unspecified error: {opt.text}")
+                            return "dns_failed"
+                        elif opt.code == 1:
+                            logging.warning("Unsupported DNSKEY Algorithm.")
+                            return "dnssec_failed"
+                        elif opt.code == 2:
+                            logging.warning("Unsupported DS Digest Type.")
+                            return "dnssec_failed"
+                        elif opt.code == 3:
+                            logging.warning("Stale DNSSEC answer.")
+                            return "dnssec_failed"
+                        elif opt.code == 4:
+                            logging.warning("Forged DNSSEC answer.")
+                            return "dnssec_failed"
+                        elif opt.code == 5:
+                            logging.warning("DNSSEC Indeterminate error.")
+                            return "dnssec_failed"
+                        elif opt.code == 6:
+                            logging.warning("Invalid signature ('DNSSEC Bogus').")
+                            return "dnssec_failed"
+                        elif opt.code == 7:
+                            logging.warning("DNSSEC signature expired.")
+                            return "dnssec_failed"
+                        elif opt.code == 8:
+                            logging.warning("DNSSEC signature not yet valid.")
+                            return "dnssec_failed"
+                        elif opt.code == 9:
+                            logging.warning("DNSSEC DNSKEY missing.")
+                            return "dnssec_failed"
+                        elif opt.code == 10:
+                            logging.warning("DNSSEC RRSIGs missing.")
+                            return "dnssec_failed"
+                        elif opt.code == 11:
+                            logging.warning("No Zone Key Bit Set.")
+                            return "dnssec_failed"
+                        elif opt.code == 12:
+                            logging.warning("NSEC Missing.")
+                            return "dnssec_failed"
+                        elif opt.code == 13:
+                            logging.warning("Resolver returned SERVFAIL RCODE from cache.")
+                            return "dns_failed"
+                        elif opt.code == 14:
+                            logging.warning("Server Not Ready.")
+                            return "dns_failed"
+                        elif opt.code == 15:
+                            logging.warning("Domain blocklisted by DNS server operator.")
+                            return "dns_failed"
+                        elif opt.code == 16:
+                            logging.warning("Domain Censored.")
+                            return "dns_failed"
+                        elif opt.code == 17:
+                            logging.warning("Domain Filtered as requested by client.")
+                            return "dns_failed"
+                        elif opt.code == 18:
+                            logging.warning("Request Prohibited; client unauthorized.")
+                            return "dns_failed"
+                        elif opt.code == 19:
+                            logging.warning("Stale NXDOMAIN answer.")
+                            return "dns_failed"
+                        elif opt.code == 20:
+                            logging.warning("Not Authoritative.")
+                            return "dns_failed"
+                        elif opt.code == 21:
+                            logging.warning("Requested operation or query not supported.")
+                            return "dns_failed"
+                        elif opt.code == 22:
+                            logging.warning("No Reachable Authoritative Nameserver.")
+                            return "dns_failed"
+                        elif opt.code == 23:
+                            logging.warning("Network Error.")
+                            return "dns_failed"
+                        elif opt.code == 24:
+                            logging.warning("Invalid Data.")
+                            return "dns_failed"
+                        '''
+
+            if response.rcode() == dns.rcode.FORMERR:
+                logging.error('Received Format error; query was malformed or otherwise uninterpretable by the DNS server.')
+                return "dns_failed"
+
+            if response.rcode() == dns.rcode.SERVFAIL:
+                logging.error('Received SERVFAIL response.')
+                return "dns_failed"
+
+            if response.rcode() == dns.rcode.NXDOMAIN:
+                logging.error('Received NXDOMAIN response.')
                 return "no_tlsa"
-            except dns.resolver.NoAnswer:
-                return "no_tlsa"
-            except Exception as e:
-                ctx.log.debug(f"DNS query failed for {tlsa_name}: {e}")
-                return "no_tlsa"
-        
+
+            if response.rcode() == dns.rcode.NOTIMP:
+                logging.error('DNS server does not support request type of DNS query.')
+                return "dns_failed"
+
+            if response.rcode() == dns.rcode.REFUSED:
+                logging.error('DNS server refused the DNS query.')
+                return "dns_failed"
+
+            # Assume NOERROR response
+            tlsa_records = [rr for rr in response]
+            self.cache[cache_key] = tlsa_records
+
         if not tlsa_records:
             return "no_tlsa"
         
@@ -188,18 +351,16 @@ class DANETLSAValidator:
         matching_type = tlsa.mtype
         tlsa_cert_assoc_data = tlsa.cert
         
-        ctx.log.debug(f'Checking against TLSA record: {tlsa}')
+        logging.debug(f'Checking against TLSA record: {tlsa}')
 
         # Get the data to match based on selector
+        # TODO: This logic Works if usage == 1 or usage == 3, but need more code to account for usage types 0 and 2.
         if selector == 0:  # Full certificate
             data = cert_pem
         elif selector == 1:  # SubjectPublicKeyInfo
-            data = cert.public_key().public_bytes(
-                encoding=serialization.Encoding.DER,
-                format=serialization.PublicFormat.SubjectPublicKeyInfo
-            )
+            data = cert.public_key().public_bytes(encoding=serialization.Encoding.DER, format=serialization.PublicFormat.SubjectPublicKeyInfo)
         else:
-            ctx.log.warn(f"Unknown selector value: {selector}")
+            logging.warning(f"Unknown selector value: {selector}")
             return False
         
         # Apply matching type
@@ -210,37 +371,35 @@ class DANETLSAValidator:
         elif matching_type == 2:  # SHA-512
             computed = hashlib.sha512(data).digest()
         else:
-            ctx.log.warn(f"Unknown matching type: {matching_type}")
+            logging.warning(f"Unknown matching type: {matching_type}")
             return False
         
         # Compare
         match = computed == tlsa_cert_assoc_data
         
         if match:
-            ctx.log.info(f"TLSA match: \n"
-                f"  - Certificate Usage:   {usage} ({TLSA.Usage(usage).name})\n" 
-                f"  - Selector:            {selector} ({TLSA.Selector(selector).name})\n"
-                f"  - Matching Type:       {matching_type} ({TLSA.MatchingType(matching_type).name})\n"
+            logging.info(f"TLSA match: \n"
+                f"  - Certificate Usage:   {TLSA.Usage(usage).name} ({usage})\n" 
+                f"  - Selector:            {TLSA.Selector(selector).name} ({selector})\n"
+                f"  - Matching Type:       {TLSA.MatchingType(matching_type).name} {matching_type} ()\n"
                 f"  - Matched Data:        {computed.hex()}")
         
         return match
     
-    def verify_dnssec(self, answer) -> bool:
+    def verify_dnssec(self, response: dns.message.QueryMessage) -> bool:
         """
-        Verify DNSSEC validation of the answer.
-        Note: This is a simplified check. Full DNSSEC validation is complex.
+        Confirm DNS response from recursive resolver has Authenticated Data (AD) flag set to indicate a validated DNSSEC response.
         """
         try:
-            # Check if the recursive resolver validated DNSSEC (e.g. answer has the Authenticated Data (AD) flag set).
-            return answer.response.flags & dns.flags.AD != 0
+            return response.flags & dns.flags.AD
         except Exception as e:
-            ctx.log.debug(f"DNSSEC check failed: {e}")
+            logging.debug(f"DNSSEC check failed: {e}")
             return False
     
     def done(self):
         """Called when the add-on is unloaded."""
-        ctx.log.info("DANE TLSA Validator statistics:")
-        ctx.log.info(f"  Validated: {self.stats['validated']}")
-        ctx.log.info(f"  Failed: {self.stats['failed']}")
-        ctx.log.info(f"  No TLSA: {self.stats['no_tlsa']}")
-        ctx.log.info(f"  DNSSEC Failed: {self.stats['dnssec_failed']}")
+        print("DANE TLSA Validator statistics:")
+        print(f"  Validated: {self.stats['validated']}")
+        print(f"  Failed: {self.stats['failed']}")
+        print(f"  No TLSA: {self.stats['no_tlsa']}")
+        print(f"  DNSSEC Failed: {self.stats['dnssec_failed']}")

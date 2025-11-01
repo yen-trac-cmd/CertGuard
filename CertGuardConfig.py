@@ -53,6 +53,8 @@ class Config:
         self.quick_check       = cfg["sct_config"]["quick_check"]
         self.verify_signatures = cfg["sct_config"]["verify_signatures"]
         self.verify_inclusion  = cfg["sct_config"]["verify_inclusion"]
+        self.enforce_dane      = cfg["dane_config"]["enforce_dane"]
+        self.require_dnssec    = cfg["dane_config"]["require_dnssec"]
         self.country_list      = [country.upper() for country in cfg["country_filtering"]["country_list"]]
         self.blocklist         = [country.upper() for country in cfg["country_filtering"]["blocklist"]]
 

@@ -445,8 +445,14 @@ def expiry_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLeve
     return ErrorLevel.CRIT, error_message   
 
 def revocation_checks(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, Optional[str]]:
-    """ Build cert chain provided by server """
+    """
+    Facade function for performing revocation checking against certificates.
+    """
+    if not CONFIG.revocation_checks:
+        logging.warning("Skipping revocation checks per 'revocation_checks' configuration directive.")
+        return ErrorLevel.NONE, None
     
+    # Build cert chain provided by server
     cert_chain = [cert.to_cryptography() for cert in flow.server_conn.certificate_list] 
     
     # Add root cert to complete the chain, provided that it's not already supplied in the chain.
@@ -835,16 +841,20 @@ def check_caa_per_domain(domain: str, ca_identifiers: list[str]) -> tuple[bool, 
                 try:
                     answers = dns.query.udp_with_fallback(query, current_resolver, timeout=CONFIG.dns_timeout)  # timeout parameter is required, otherwise mitmproxy can freeze
                     got_response=True
-                except dns.exception.Timeout as e:
+                except dns.exception.Timeout:
                     CONFIG.resolvers.rotate(1)
                     current_resolver = CONFIG.resolvers[0]
                     logging.error(f'DNS query using resolver {CONFIG.resolvers[-1]} for "{check_domain}" timed out!!  ...Trying again with resolver {current_resolver}.')
-            
+                except Exception as e:
+                    CONFIG.resolvers.rotate(1)
+                    current_resolver = CONFIG.resolvers[0]
+                    logging.debug(f"Exception encountered for DNS query using resolver {CONFIG.resolvers[-1]}: {e}")
+                    logging.error(f'  --> Trying again with resolver {current_resolver}.')
+
             if answers[1]:
                 logging.warning(f'DNS query had to fallback to TCP due to truncated response')
             
             answers=answers[0]
-            #logging.info(f'DNS Response flags: {answers.flags}')
             logging.debug(f'Full resource record set: {answers}')
            
             if answers.flags & dns.flags.AD:   # Indicates a DNSSEC-validated resposne; dns.flags.AD = 32
@@ -933,11 +943,6 @@ def check_caa_per_domain(domain: str, ca_identifiers: list[str]) -> tuple[bool, 
     logging.warning(f'No published CAA record found; return true per RFC8659')
     return True, None, records_found # No CAA record founds; return true per RFC8659
 
-def dane_check(flow: http.HTTPFlow, root: x509.Certificate):
-    """Check for DANE TLSA records and, if found, validate server certificate per RFC 6698"""
-    logging.warning(f"-----------------------------------Entering dane_check()---------------------------------------------")
-    return ErrorLevel.NONE, None
-
 def test_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, Optional[str]]:
     # Modified example rule from mitmproxy documentation
     logging.warning(f"-----------------------------------Entering test_check()---------------------------------------------")
@@ -947,11 +952,20 @@ def test_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel,
         return ErrorLevel.INFO, violation
     return ErrorLevel.NONE, None
 
+def dane_check(flow: http.HTTPFlow, root: x509.Certificate):
+    """Check for DANE TLSA records and, if found, validate server certificate per RFC 6698"""
+    logging.warning(f"-----------------------------------Entering dane_check()---------------------------------------------")
+    if dane_validator.dnssec_failure == True or dane_validator.dane_failure == True:
+        violation = dane_validator.violation
+        return ErrorLevel.FATAL, f'{violation}'    
+    
+    return ErrorLevel.NONE, None
 #====================================================================== Main ===================================================================
 
 # Class to inject OCSP Stapling requests
 ocsp_addon = OCSPStaplingConfig()
 dane_validator = DANETLSAValidator()
+
 addons = [ocsp_addon, dane_validator]
 
 approved_hosts = set()
@@ -1103,6 +1117,7 @@ def request(flow: http.HTTPFlow) -> None:
     }
 
     my_checks = [
+        dane_check,
         root_country_check, 
         controlled_CA_checks, 
         expiry_check, 
@@ -1112,7 +1127,6 @@ def request(flow: http.HTTPFlow) -> None:
         sct_check, 
         ct_quick_check,
         verify_cert_caa,
-        dane_check,
         test_check,
     ] 
 

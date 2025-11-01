@@ -6,9 +6,10 @@ logging_level = "debug"
 # Provide a floating point decimal value for DNS timeout threshold (measured in seconds).
 dns_timeout = 0.30
 
-# Provide IP(s) for trusted DNS resolvers, preferrably that support DNSSEC validation. 
+# Provide IP(s) for a (preferrably local) DNSSEC-validating resolver that supports Extended DNS Errors (RFC8914) such as Unbound, PowerDNS, or BIND.
 # CertGuard will rotate through configured resolvers in round-robin fashion to avoid being ratelimited by upstream providers
-resolvers = ['1.1.1.1', '9.9.9.9', '8.8.8.8'] # Cloudflare, Quad9, and Google resolvers, respectively.
+resolvers = ['127.0.0.1']
+#resolvers = ['1.1.1.1', '9.9.9.9', '8.8.8.8'] # Cloudflare, Quad9, and Google resolvers, respectively.
 
 # OPTIONAL: Provide the path to a directory that contains custom root certificate files in PEM format.
 # Note: All root certificate files must have a ".pem" file extension.
@@ -96,3 +97,13 @@ verify_signatures = true
 # Enabling 'verify_inclusion' instructs CertGuard to retrieve an inclusion proof from RFC6962-compliant CT log servers and perform a full Merkle tree reconstruction against the 
 # latest Signed Tree Head (STH).  This provides a cryptographic guarantee that the leaf certificate was fully logged by the CT server.
 verify_inclusion = true
+
+
+[dane_config]
+# Configures options for DNS-Based Authentication of Named Entities (DANE) verification.
+# Set 'enforce_dane' to true to raise a Level-6 Warning (e.g. hard block) for sites that are configured for DANE but fail validation.
+enforce_dane = true
+
+# Set 'require_dnssec' to true to ensure that TLSA resource record lookups are validated via DNSSEC (per DANE specification).
+# Note: This option only exists for experimentation purposes.  For production use cases, DNSSEC is mandatory!
+require_dnssec = true

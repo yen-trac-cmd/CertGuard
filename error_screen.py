@@ -97,4 +97,4 @@ def error_screen(flow, token, color, violations, error_level):
         """
        
     warning_html = "\n".join(line.rstrip() for line in warning_html.splitlines() if line.strip())
-    flow.response = http.Response.make(403, warning_html, {"Content-Type": "text/html"} )
+    flow.response = http.Response.make(403, warning_html, {"Content-Type": "text/html", "Cache-Control": "no-cache, no-store, must-revalidate", "Expires": "0"} )

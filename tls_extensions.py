@@ -1,3 +1,4 @@
+import logging
 from CertGuardConfig import Config
 from mitmproxy import tls, ctx
 from mitmproxy.addons.tlsconfig import TlsConfig
@@ -31,7 +32,7 @@ class OCSPStaplingConfig(TlsConfig):
         if not CONFIG.revocation_checks:
             return
         
-        ctx.log.info('===================================BEGIN New TLS negotiation============================================')
+        logging.info('===================================BEGIN New TLS negotiation============================================')
         
         # Let the parent class set up the connection first
         super().tls_start_server(tls_start)
@@ -40,7 +41,7 @@ class OCSPStaplingConfig(TlsConfig):
         
         # Skip if this domain previously failed with OCSP
         if sni in self.failed_domains:
-            ctx.log.debug(f"[OCSP] Skipping OCSP for {sni} (previous failure)")
+            logging.debug(f"[OCSP] Skipping OCSP for {sni} (previous failure)")
             return
         
         try:
@@ -54,7 +55,7 @@ class OCSPStaplingConfig(TlsConfig):
                     if ocsp_data:
                         # Get SNI from connection or fall back to address
                         callback_sni = tls_start.conn.sni or str(tls_start.conn.address[0])
-                        ctx.log.info(f"[OCSP] Received OCSP response ({len(ocsp_data)} bytes) for {callback_sni}")
+                        logging.info(f"[OCSP] Received OCSP response ({len(ocsp_data)} bytes) for {callback_sni}")
                         
                         # Store using connection ID as key (temporary until we have a flow)
                         conn_id = id(tls_start.conn)
@@ -69,11 +70,11 @@ class OCSPStaplingConfig(TlsConfig):
                             cert_chain = conn.get_peer_cert_chain()
                             self.parse_and_validate_ocsp_response(ocsp_data, callback_sni, cert_chain, conn_id)
                         except Exception as e:
-                            ctx.log.error(f"[OCSP] Failed to parse/validate OCSP response: {e}")
+                            logging.error(f"[OCSP] Failed to parse/validate OCSP response: {e}")
                     
                     return True
                 except Exception as e:
-                    ctx.log.error(f"[OCSP] Callback error: {e}")
+                    logging.error(f"[OCSP] Callback error: {e}")
                     return True
             
            # Set the OCSP callback
@@ -87,28 +88,27 @@ class OCSPStaplingConfig(TlsConfig):
             # Request OCSP stapling
             tls_start.ssl_conn.request_ocsp()
             tls_start.ssl_conn.set_connect_state()
-            ctx.log.info(f"[OCSP] Requesting OCSP stapling for {sni}")
+            logging.info(f"[OCSP] Requesting OCSP stapling for {sni}")
             
         except Exception as e:
-            ctx.log.warn(f"[OCSP] Error setting up OCSP for {sni}: {e}")
+            logging.warning(f"[OCSP] Error setting up OCSP for {sni}: {e}")
             # Mark as failed and don't try OCSP for this domain again
             self.failed_domains.add(sni)
-            # Don't re-raise - let the connection proceed without OCSP
     
-    def tls_handshake_error(self, data: tls.TlsData) -> None:
+    def tls_failed_server(self, data: tls.TlsData) -> None:
         """Called when TLS handshake fails"""
         sni = data.conn.sni or str(data.conn.address[0])
         
         if sni not in self.failed_domains:
             self.failed_domains.add(sni)
-            ctx.log.warn(f"[OCSP] TLS handshake failed for {sni}, disabling OCSP for this domain")
+            logging.warning(f"[OCSP] TLS handshake failed for {sni}, disabling OCSP for this domain")
     
     def parse_and_validate_ocsp_response(self, ocsp_data: bytes, sni: str, cert_chain, conn_id) -> None:
         """Parse, validate signature, and display OCSP response details"""
         try:
             # Parse OCSP response using cryptography library
             ocsp_resp = ocsp.load_der_ocsp_response(ocsp_data)
-            ctx.log.info(f"[OCSP] Response Status: {ocsp_resp.response_status.name}")
+            logging.info(f"[OCSP] Response Status: {ocsp_resp.response_status.name}")
             
             if ocsp_resp.response_status == ocsp.OCSPResponseStatus.SUCCESSFUL:
                 # Validate the OCSP response signature
@@ -124,88 +124,88 @@ class OCSPStaplingConfig(TlsConfig):
                     self.ocsp_by_connection[conn_id]["ocsp_serial_number"] = str(ocsp_resp.serial_number)
                 
                 if signature_valid:
-                    ctx.log.info(f"[OCSP] Signature validation: PASSED")
+                    logging.info(f"[OCSP] Signature validation: PASSED")
                 else:
-                    ctx.log.error(f"[OCSP] Signature validation: FAILED")
+                    logging.error(f"[OCSP] Signature validation: FAILED")
                 
                 # Get certificate status
-                ctx.log.info(f"[OCSP] Certificate Status: {ocsp_resp.certificate_status.name}")
+                logging.info(f"[OCSP] Certificate Status: {ocsp_resp.certificate_status.name}")
 
                 # Check revocation reason if revoked
                 if ocsp_resp.certificate_status == ocsp.OCSPCertStatus.REVOKED:
-                    ctx.log.info(f"[OCSP] Revocation Time: {ocsp_resp.revocation_time_utc}")
+                    logging.info(f"[OCSP] Revocation Time: {ocsp_resp.revocation_time_utc}")
                     if ocsp_resp.revocation_reason:
-                        ctx.log.info(f"[OCSP] Revocation Reason: {ocsp_resp.revocation_reason.name}")
+                        logging.info(f"[OCSP] Revocation Reason: {ocsp_resp.revocation_reason.name}")
                     else:
-                        ctx.log.info(f"[OCSP] Revocation Reason: Unspecified")
+                        logging.info(f"[OCSP] Revocation Reason: Unspecified")
 
                 # Get timestamps
-                ctx.log.info(f"[OCSP] This Update: {ocsp_resp.this_update_utc}")
+                logging.info(f"[OCSP] This Update: {ocsp_resp.this_update_utc}")
                 if ocsp_resp.next_update_utc:
-                    ctx.log.info(f"[OCSP] Next Update: {ocsp_resp.next_update_utc}")
-                ctx.log.info(f"[OCSP] Produced at: {ocsp_resp.produced_at_utc} ")
+                    logging.info(f"[OCSP] Next Update: {ocsp_resp.next_update_utc}")
+                logging.info(f"[OCSP] Produced at: {ocsp_resp.produced_at_utc} ")
 
                 # Get serial number
-                ctx.log.info(f"[OCSP] Serial Number: {ocsp_resp.serial_number}")
+                logging.info(f"[OCSP] Serial Number: {ocsp_resp.serial_number}")
                 
                 # Get responder information
                 if ocsp_resp.responder_name:
-                    ctx.log.info(f"[OCSP] Responder Name: {ocsp_resp.responder_name.rfc4514_string()}")
+                    logging.info(f"[OCSP] Responder Name: {ocsp_resp.responder_name.rfc4514_string()}")
                 if ocsp_resp.responder_key_hash:
-                    ctx.log.info(f"[OCSP] Responder Key Hash: {ocsp_resp.responder_key_hash.hex()}")
+                    logging.info(f"[OCSP] Responder Key Hash: {ocsp_resp.responder_key_hash.hex()}")
                 
                 # Get hash algorithm
-                #ctx.log.info(f"[OCSP] Hash Algorithm: {ocsp_resp.hash_algorithm.name}")
+                #logging.info(f"[OCSP] Hash Algorithm: {ocsp_resp.hash_algorithm.name}")
                 
                 # Get signature algorithm
-                ctx.log.info(f"[OCSP] Signature Hash Algorithm: {ocsp_resp.signature_hash_algorithm.name}")
+                logging.info(f"[OCSP] Signature Hash Algorithm: {ocsp_resp.signature_hash_algorithm.name}")
 
                 # Check for extensions
                 try:
                     extensions = ocsp_resp.single_extensions
                     if extensions:
-                        ctx.log.info(f"[OCSP] Found {len(extensions)} extension(s)")
+                        logging.info(f"[OCSP] Found {len(extensions)} extension(s)")
                         for ext in extensions:
-                            ctx.log.info(f"[OCSP] Extension OID: {ext.oid.dotted_string} ({ext.oid._name if hasattr(ext.oid, '_name') else 'unknown'})")
-                            ctx.log.info(f"[OCSP] Extension Critical: {ext.critical}")
+                            logging.info(f"[OCSP] Extension OID: {ext.oid.dotted_string} ({ext.oid._name if hasattr(ext.oid, '_name') else 'unknown'})")
+                            logging.info(f"[OCSP] Extension Critical: {ext.critical}")
 
                             # Check for Signed Certificate Timestamp (SCT) extension
                             if ext.oid.dotted_string == "1.3.6.1.4.1.11129.2.4.5":           # OID for SCT List
-                                ctx.log.info(f"[OCSP] *** Signed Certificate Timestamp (SCT) Extension Found ***")
+                                logging.info(f"[OCSP] *** Signed Certificate Timestamp (SCT) Extension Found ***")
                                 try:
                                     self.ocsp_by_connection[conn_id]["ocsp_contains_sct"] = True
                                     sct_list = ext.value
-                                    ctx.log.info(f"[OCSP] SCT List contains {len(sct_list)} SCT(s)")
+                                    logging.info(f"[OCSP] SCT List contains {len(sct_list)} SCT(s)")
 
                                     # Store sct_list for later parsing by CertGuard
                                     self.ocsp_sct_list[conn_id] = sct_list
                                     
                                     # Log SCT values
                                     for i, sct in enumerate(sct_list, 1):
-                                        ctx.log.info(f"[OCSP]   SCT #{i}:")
-                                        ctx.log.info(f"[OCSP]     Version: {sct.version.name}")
-                                        ctx.log.info(f"[OCSP]     Log ID: {sct.log_id.hex()}")
-                                        ctx.log.info(f"[OCSP]     Timestamp: {sct.timestamp}")
-                                        ctx.log.info(f"[OCSP]     Entry Type: {sct.entry_type.name}")
+                                        logging.info(f"[OCSP]   SCT #{i}:")
+                                        logging.info(f"[OCSP]     Version: {sct.version.name}")
+                                        logging.info(f"[OCSP]     Log ID: {sct.log_id.hex()}")
+                                        logging.info(f"[OCSP]     Timestamp: {sct.timestamp}")
+                                        logging.info(f"[OCSP]     Entry Type: {sct.entry_type.name}")
                                 except Exception as e:
-                                    ctx.log.warn(f"[OCSP] Could not parse SCT extension: {e}")
+                                    logging.warning(f"[OCSP] Could not parse SCT extension: {e}")
                             else:
                                 # Try to display the extension value
                                 if isinstance(ext.value, UnrecognizedExtension):
                                     value_bytes = ext.value.value
                                 else:
                                     value_bytes = ext.value
-                                ctx.log.info(f"[OCSP] Extension Value: value={repr(value_bytes)}")
+                                logging.info(f"[OCSP] Extension Value: value={repr(value_bytes)}")
 
                 except AttributeError:
-                    ctx.log.debug("[OCSP] No extensions present in OCSP response")
+                    logging.debug("[OCSP] No extensions present in OCSP response")
                 except Exception as e:
-                    ctx.log.warn(f"[OCSP] Error parsing OCSP extensions: {e}")
+                    logging.warning(f"[OCSP] Error parsing OCSP extensions: {e}")
                 
-            ctx.log.info(f"[OCSP] ==========================================")
+            logging.info(f"[OCSP] ==========================================")
             
         except Exception as e:
-            ctx.log.error(f"[OCSP] Error parsing OCSP response: {e}")
+            logging.error(f"[OCSP] Error parsing OCSP response: {e}")
    
     def tls_established_server(self, data: tls.TlsData) -> None:
         """Called after TLS handshake is complete"""
@@ -215,93 +215,6 @@ class OCSPStaplingConfig(TlsConfig):
         sni = data.conn.sni or str(data.conn.address[0])
         conn_id = id(data.conn)
         if conn_id in self.ocsp_by_connection:
-            ctx.log.info(f"[OCSP] TLS established with OCSP stapling for {sni}")
+            logging.info(f"[OCSP] TLS established with OCSP stapling for {sni}")
         else:
-            ctx.log.info(f"[OCSP] TLS established without OCSP stapling for {sni}")
-
-'''
-def validate_ocsp_signature(self, ocsp_resp: ocsp.OCSPResponse, cert_chain) -> bool:
-        """Validate the OCSP response signature against the certificate chain"""
-        try:
-            # Convert PyOpenSSL certificate chain to cryptography certificates
-            issuer_cert = None
-            
-            if cert_chain and len(cert_chain) > 1:
-                issuer_openssl = cert_chain[1]
-                # Convert to x509.Certificate object
-                try:
-                    issuer_cert = issuer_openssl.to_cryptography()
-                except AttributeError:
-                    # Fallback: export as PEM and re-import
-                    try:
-                        issuer_pem = issuer_openssl.public_bytes(serialization.Encoding.PEM)
-                        issuer_cert = x509.load_pem_x509_certificate(issuer_pem)
-                    except Exception as e:
-                        ctx.log.warn(f"[OCSP] Could not convert issuer certificate: {e}")
-                        return False
-            
-            if not issuer_cert:
-                ctx.log.warn("[OCSP] Could not extract issuer certificate from chain")
-                return False
-            
-            candidate_responder_certs = []
-
-            # Check if the OCSP response includes certificates (for delegated responders)
-            if ocsp_resp.certificates:
-                # Try to validate using the certificates included in the OCSP response
-                for ocsp_cert in ocsp_resp.certificates:
-                    ctx.log.info(f'[OCSP] Found embedded certificate in OCSP response:')
-                    ctx.log.info(f'[OCSP]   - Subject: {ocsp_cert.subject.rfc4514_string()}')
-                    ctx.log.info(f'[OCSP]   - Issuer:  {ocsp_cert.issuer.rfc4514_string()}')
-
-                    # Check for delegated responder use
-                    try:
-                        eku = ocsp_cert.extensions.get_extension_for_oid(x509.ExtensionOID.EXTENDED_KEY_USAGE).value
-                        if x509.ExtendedKeyUsageOID.OCSP_SIGNING in eku:
-                            ctx.log.info("[OCSP]    - Cert has necessary OCSP responder Extended Key Usage (EKU).")
-                            candidate_responder_certs.append(ocsp_cert)
-                        else:
-                            ctx.log.error("[OCSP] Embedded cert not marked for OCSP signing.")
-                    except x509.ExtensionNotFound:
-                        ctx.log.error("[OCSP] No Extended Key Usage extension found.")
-            
-            if not candidate_responder_certs:
-                ctx.log.info('[OCSP] No delegated responder cert(s) found; using issuing CA certificate for OCSP signature verification.')
-                candidate_responder_certs = [issuer_cert]
-                    
-            # Verify OCSP response signature
-            data_to_verify = ocsp_resp.tbs_response_bytes  # raw signed bytes
-            signature = ocsp_resp.signature
-            signature_hash_algorithm = ocsp_resp.signature_hash_algorithm
-
-            for responder_cert in candidate_responder_certs:
-                pubkey = responder_cert.public_key()
-                
-                try:
-                    if isinstance(pubkey, rsa.RSAPublicKey):
-                        pubkey.verify(signature, data_to_verify, padding.PKCS1v15(), signature_hash_algorithm)
-                    elif isinstance(pubkey, ec.EllipticCurvePublicKey):
-                        pubkey.verify(signature, data_to_verify, ec.ECDSA(signature_hash_algorithm))
-                    elif isinstance(pubkey, (ed25519.Ed25519PublicKey, ed448.Ed448PublicKey)):
-                        pubkey.verify(signature, data_to_verify)
-                    else:
-                        ctx.log.error(f"[OCSP] Unsupported public key type: {type(pubkey)}")
-                        continue
-            
-                    # If reach here, validation for one of the methods above was successful.
-                    ctx.log.info(f"[OCSP] OCSP response digitally signed by: {responder_cert.subject.rfc4514_string()}")
-                    return True
-                except InvalidSignature:
-                    ctx.log.error(f"[OCSP] OCSP response digital signature verification failed with {responder_cert.subject.rfc4514_string()}: {e}")
-                    continue
-                except Exception as e:
-                    ctx.log.error(f'[OCSP] Unexpected exception encountered while attempting to verify digital signature: {e}')
-                    continue
-            
-            ctx.log.error("[OCSP] All candidate certificates failed to verify OCSP response signature.")
-            return False                    
-
-        except Exception as e:
-            ctx.log.error(f"[OCSP] Error validating OCSP signature: {e}")
-            return False
-'''
+            logging.info(f"[OCSP] TLS established without OCSP stapling for {sni}")

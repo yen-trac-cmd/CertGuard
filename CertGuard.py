@@ -4,12 +4,14 @@ from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519, ed448, dsa, padding
+from cryptography.x509.extensions import SubjectKeyIdentifier
 from dane import DANETLSAValidator
 from datetime import datetime, timedelta, timezone
 from dns.rdtypes.ANY import CAA
 from dns.resolver import dns
 from error_screen import error_screen
-from helper_functions import get_cert_domains, supported_ciphers_list
+from helper_functions import calculate_ski, get_cert_domains, supported_ciphers_list
+from logging.handlers import RotatingFileHandler
 from mitmproxy import ctx, http, addonmanager
 from tls_extensions import OCSPStaplingConfig
 from typing import Sequence, Optional, Tuple
@@ -34,15 +36,48 @@ def load(loader: addonmanager.Loader) -> None:
         opts = ctx.options.keys()
         if "console_eventlog_verbosity" in opts:
             # Running in mitmproxy console UI
-            ctx.log.info("Detected mitmproxy console UI")
+            logging.info("Detected mitmproxy console UI")
             ctx.options.console_eventlog_verbosity = CONFIG.logging_level
         else:
             # Running in mitmdump (or mitmweb)
-            ctx.log.info("Detected mitmdump/mitmweb")
+            logging.info("Detected mitmdump/mitmweb")
             ctx.options.termlog_verbosity = CONFIG.logging_level
     else:
         logging.warning(f"Invalid console logging mode defined in config.toml; defaulting to 'info' level.")
     
+
+    #######################################################################TESTING#################################################
+    LOG_FILE = "logfile.log"
+    LOG_FORMAT = '%(asctime)s.%(msecs)03d %(name)s %(levelname)s %(message)s'
+    formatter = logging.Formatter(LOG_FORMAT)
+    formatter.datefmt = '%Y%m%d_%H:%M:%S'
+    
+    # Create a file handler (e.g., RotatingFileHandler for log rotation)
+    file_handler = RotatingFileHandler(LOG_FILE, maxBytes=1048576*5, backupCount=7)
+    file_handler.setFormatter(formatter)
+    file_handler.setLevel(logging.DEBUG) 
+        
+    logger = logging.getLogger('CertGuard')
+    if not any(isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", None) == file_handler.baseFilename for h in logger.handlers):
+        logger.addHandler(file_handler)
+    
+    logging.info(f"Logging to {LOG_FILE}.")
+    '''
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.DEBUG)
+    logfile = os.path.join(os.getcwd(), "logfile.log")
+    handler = logging.FileHandler(logfile)
+    formatter = logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s")
+    handler.setFormatter(formatter)
+    if not any(isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", None) == handler.baseFilename for h in logger.handlers):
+        logger.addHandler(handler)
+
+    #logging.basicConfig(level=logging.DEBUG, format='"%(asctime)s [%(name)s] %(levelname)s: %(message)s"', filename=logfile, filemode='a')
+    logger.info('GGGAAAAAAAAAAAAAAAAAAAAAAAAAA request made from module: %s', __name__)
+    '''
+    #######################################################################TESTING#################################################
+    
+
     match CONFIG.min_tls_version:
         case 1.0:
             ctx.options.tls_version_server_min = "TLS1"
@@ -166,7 +201,7 @@ def is_navigation_request(flow: http.HTTPFlow, referer_header, accept_header) ->
 
 def get_root_cert(server_chain: Sequence[x509.Certificate], root_store: Sequence[x509.Certificate]) -> Tuple[Optional[x509.Certificate], Optional[str]]:
     """
-    Given a mitmproxy https flow.server_conn.certificate_list, attempt to resolve and verify the root CA certificate for the server's certificate chain.
+    Given an x509.Certificate chain and trusted root store, attempt to resolve and verify the root CA certificate for the server's certificate chain.
 
     Args:
         chain (Sequence): Ordered x509 certificate chain presented by the server (leaf first, intermediates, and optionally a root cert)
@@ -209,6 +244,11 @@ def get_root_cert(server_chain: Sequence[x509.Certificate], root_store: Sequence
         else:
             label = f"Subordinate CA #{i-1}" if i > 2 else "Subordinate CA"
         
+        try:
+            ski_extension = cert.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value.digest.hex()
+        except x509.ExtensionNotFound:
+            ski_extension = calculate_ski(cert)
+
         fields = {
             "Subject": cert.subject.rfc4514_string(),
             "Issuer": cert.issuer.rfc4514_string(),
@@ -216,7 +256,9 @@ def get_root_cert(server_chain: Sequence[x509.Certificate], root_store: Sequence
             "Serial number (hex)": hex(cert.serial_number),
             "Not valid before UTC": cert.not_valid_before_utc,
             "Not valid after UTC": cert.not_valid_after_utc,
-            "Fingerprint (SHA256)": cert.fingerprint(hashes.SHA256()).hex(),
+            "Subject Key ID (SKI)": ski_extension,
+            "Fingerprint (SHA1)": cert.fingerprint(hashes.SHA1()).hex(),
+            "Fingerprint (SHA256)": cert.fingerprint(hashes.SHA256()).hex(),            
         }
         
         # Compute padding width (based on longest field name)
@@ -241,6 +283,8 @@ def get_root_cert(server_chain: Sequence[x509.Certificate], root_store: Sequence
                 logging.info  (f'  Serial number (hex):  {hex(root.serial_number)}')
                 logging.info  (f'  Not valid before UTC: {root.not_valid_before_utc}')
                 logging.info  (f'  Not valid after UTC:  {root.not_valid_after_utc}')
+                logging.info  (f'  Subject Key ID (SKI): {calculate_ski(root)}')
+                logging.info  (f'  Fingerprint (SHA1):   {(root.fingerprint(hashes.SHA1())).hex()}')
                 logging.info  (f'  Fingerprint (SHA256): {(root.fingerprint(hashes.SHA256())).hex()}')
                 return root, None
             except Exception as e:
@@ -955,6 +999,10 @@ def test_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel,
 def dane_check(flow: http.HTTPFlow, root: x509.Certificate):
     """Check for DANE TLSA records and, if found, validate server certificate per RFC 6698"""
     logging.warning(f"-----------------------------------Entering dane_check()---------------------------------------------")
+    logging.debug(f'dane_validator.dnssec_failure: {dane_validator.dnssec_failure}')
+    logging.debug(f'dane_validator.dane_failure:   {dane_validator.dane_failure}')
+    logging.debug(f'dane_validator.violation:      {dane_validator.violation}')
+
     if dane_validator.dnssec_failure == True or dane_validator.dane_failure == True:
         violation = dane_validator.violation
         return ErrorLevel.FATAL, f'{violation}'    

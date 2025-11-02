@@ -1,5 +1,7 @@
+import hashlib
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import serialization
 from mitmproxy import certs
 
 def supported_ciphers_list() -> list[str]:
@@ -10,14 +12,6 @@ def supported_ciphers_list() -> list[str]:
     with open('./resources/cipher-mapping.txt', 'r') as f:
         ciphers = [cipher_name for line in f for cipher_name in line.split()[2:4]]
     return ciphers
-
-#def cert_to_x509(cert: certs.Cert) -> x509.Certificate:
-#    """ 
-#    Convert a mitmproxy.certs.Cert or OpenSSL.crypto.X509 object into a cryptography.x509.Certificate.
-#
-#    """
-#    pem_bytes = cert.to_pem()  # returns standard PEM
-#    return x509.load_pem_x509_certificate(pem_bytes, default_backend())
 
 def get_cert_domains(x509_cert: certs.Cert) -> list[str]:
     """
@@ -44,3 +38,23 @@ def get_cert_domains(x509_cert: certs.Cert) -> list[str]:
         pass
 
     return list(domains)
+
+def calculate_ski(certificate_obj):
+    """
+    Calculates the Subject Key Identifier (SKI) from a certificate's public key.
+    
+    Args:
+        certificate_obj: An x509.Certificate object from the cryptography library.
+        
+    Returns:
+        The SKI as a hexadecimal string.
+    """
+    public_key = certificate_obj.public_key()
+    # Serialize the public key to the SubjectPublicKeyInfo DER format (SPKI)
+    # Note: The 'SubjectPublicKeyInfo' is the specific structure required by RFC 5280
+    spki_der = public_key.public_bytes(encoding=serialization.Encoding.DER, format=serialization.PublicFormat.SubjectPublicKeyInfo)
+    
+    # Calculate the hex-encoded SHA-1 hash of the SPKI DER bytes 
+    ski_hex = hashlib.sha1(spki_der).digest().hex()
+        
+    return ski_hex

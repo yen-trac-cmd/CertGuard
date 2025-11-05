@@ -25,7 +25,7 @@ from typing import Optional, Tuple
 try:
     SSLMATE_KEY = os.environ["SSLMATE_KEY"]
 except:
-    logging.fatal("Please define the 'SSLMATE_KEY' environment variable with your API key from SSLMate.com.")
+    logging.critical("Please define the 'SSLMATE_KEY' environment variable with your API key from SSLMate.com.")
 
 SSLMATE_QUERY_URL = "https://api.certspotter.com/v1/issuances"
 CT_LOG_LIST_URL   = "https://www.gstatic.com/ct/log_list/v3/log_list.json"     # Google's authoritative CT Log list
@@ -78,8 +78,8 @@ def load_ct_log_list(old_ct_log=None) -> dict:
         logging.warning(f"...falling back to cached content. Check connectivity and site availability.")
         ct_log_list = session.get(CT_LOG_LIST_URL, only_if_cached=True)
         if ct_log_list.status_code != 200:
-            logging.fatal(f'Cannot load Certificate Transparency Log List from network or local cache; failing closed.')
-            logging.fatal(f'Check network connectivity and site availability to {CT_LOG_LIST_URL}')
+            logging.critical(f'Cannot load Certificate Transparency Log List from network or local cache; failing closed.')
+            logging.critical(f'Check network connectivity and site availability to {CT_LOG_LIST_URL}')
             sys.exit()
 
     if ct_log_list.from_cache:
@@ -192,7 +192,7 @@ def extract_scts(cert: x509.Certificate, ct_log_map) -> list[dict]:
     necessary to account for SCTs delivered via the 'signed_certificate_timestamp' TLS extension or as extensions within a stapled OCSP
     (e.g. 'certificate_status') response during TLS session negotiation, but as of 2025 usage of these methods appears to be exceedingly rare.
     """
-    logging.warning(f"-----------------------------------Entering extract_scts()--------------------------------------------------")
+    logging.warning("-----------------------------------Entering extract_scts()----------------------------------------")
     try:
         ext = cert.extensions.get_extension_for_oid(ExtensionOID.PRECERT_SIGNED_CERTIFICATE_TIMESTAMPS)
     except x509.ExtensionNotFound:
@@ -254,7 +254,7 @@ def validate_signature(cert: x509.Certificate, issuer_cert: x509.Certificate, sc
         None:  Returned if validation fails.
     """
     #TODO Add support for PKCS#1 v1.5 signatures
-    logging.warning(f"-----------------------------------Entering validate_signature()--------------------------------------------------")
+    logging.warning("-----------------------------------Entering validate_signature()----------------------------------")
     timestamp = bytes.fromhex(hex(round(sct["timestamp"].replace(tzinfo=datetime.timezone.utc).timestamp() * 1000))[2:].zfill(16))
     issuer_public_key_hash = hashlib.sha256(issuer_cert.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)).digest()
     sct_extension = bytes.fromhex(sct["extension_bytes"])                          # To support future leaf_index extension by static CT API logs
@@ -299,7 +299,7 @@ def ctlog_quick_check(flow: http.HTTPFlow, leaf_cert: x509.Certificate) -> Tuple
         revoked:    Returns False if cert hasn't been rovked, or a revocation reason if cert has been revoked
         [str]:      Error message if unable to query SSLMate
     """
-    logging.warning(f"-----------------------------------Entering ctlog_quick_check()--------------------------------------------------")
+    logging.warning("-----------------------------------Entering ctlog_quick_check()-----------------------------------")
     leaf_cert_sha256 = leaf_cert.fingerprint(hashes.SHA256()).hex()
     logging.info(f'Leaf cert SHA256 fingerprint:   {leaf_cert_sha256}')
     
@@ -431,7 +431,7 @@ def verify_inclusion(sct_data: bytes, ct_log_url: str, sct_timestamp: int, log_m
         bool: Returns True for successful inclusion verification using retrieved audit proof from the CT log.
         str:  Error encountered during inclusion checking logic.
     """
-    logging.warning(f"-----------------------------------Entering verify_inclusion()--------------------------------------------------")
+    logging.warning("-----------------------------------Entering verify_inclusion()------------------------------------")
     REQUEST_TIMEOUT = 2.75 # seconds
     sth_url = ct_log_url + 'ct/v1/get-sth'
     proof_url_template = ct_log_url + 'ct/v1/get-proof-by-hash?hash={}&tree_size={}'

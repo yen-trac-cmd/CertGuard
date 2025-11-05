@@ -16,7 +16,7 @@ class OCSPStaplingConfig(TlsConfig):
         super().__init__()
         self.failed_domains = set()
         
-        # Temporary storage keyed by connection ID until we can attach to flow
+        # Temporary storage keyed by connection ID until attached to flow
         self.ocsp_by_connection = {}
         self.ocsp_sct_list={}
     
@@ -32,7 +32,7 @@ class OCSPStaplingConfig(TlsConfig):
         if not CONFIG.revocation_checks:
             return
         
-        logging.info('===================================BEGIN New TLS negotiation============================================')
+        logging.info('===================================BEGIN New TLS negotiation======================================')
         
         # Let the parent class set up the connection first
         super().tls_start_server(tls_start)
@@ -175,7 +175,7 @@ class OCSPStaplingConfig(TlsConfig):
                                 try:
                                     self.ocsp_by_connection[conn_id]["ocsp_contains_sct"] = True
                                     sct_list = ext.value
-                                    logging.info(f"[OCSP] SCT List contains {len(sct_list)} SCT(s)")
+                                    logging.info(f"[OCSP] SCT List contains {len(sct_list)} SCT(s).")
 
                                     # Store sct_list for later parsing by CertGuard
                                     self.ocsp_sct_list[conn_id] = sct_list

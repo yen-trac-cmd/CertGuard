@@ -7,3 +7,6 @@ __pycache__/
 custom_roots/
 *.db
 *.log
+
+# Testing
+test*.py

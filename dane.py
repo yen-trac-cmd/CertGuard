@@ -26,7 +26,7 @@ from CertGuardConfig import Config
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization #, hashes
 from enum import IntEnum
-from mitmproxy import tls  #ctx, http, certs
+from mitmproxy import connection #tls, http, certs
 from typing import Sequence, Optional, Tuple
 
 CONFIG = Config()
@@ -61,31 +61,22 @@ class DANETLSAValidator:
         self.cache = {}
         self.stats = {"validated": 0, "dane_failed": 0, "no_tlsa": 0, "dns_failed": 0, "dnssec_failed": 0}
 
-    def tls_established_server(self, data: tls.TlsData):
-        """Called when TLS is established with the upstream server."""
-        
-        logging.warning(f"New TLS session: {data.conn.sni}, {data.conn.id}")
+    def perform_dane_check(self, conn: connection.Server) -> None:
+        """Performs DANE validation logic against certificate chain"""
+        logging.warning(f"Flow Connection ID:       {conn.id}")
 
-        logging.warning(f"===================================BEGIN DANE Check===================================================================")
-        if not data.context.server.address:
-            return
-
-        hostname = data.context.server.address[0]
-        logging.info(f'Identified hostname from mitmproxy data.context.server: {hostname}')
-        port = data.context.server.address[1]
+        conn.address
+        hostname = conn.address[0]
+        port = conn.address[1]
         
         # Get the server certificate
-        conn = data.context.server
         if not conn or not hasattr(conn, 'certificate_list') or not conn.certificate_list:
             logging.debug(f"No certificate available for {hostname}")
             return
-        
-        leaf_cert = conn.certificate_list[0]
+
         chain = [cert.to_cryptography() for cert in conn.certificate_list]
 
-        #cert_pem = leaf_cert.to_pem()    # Convert cert into a 'bytes' object of the PEM-formatted / ASCII representation of the cert
-
-        # Validate using DANE
+        # Validate chain using DANE
         try:
             result, validation_error = self.validate_dane(hostname, port, chain)
         except Exception as e:
@@ -96,7 +87,7 @@ class DANETLSAValidator:
         self.dane_failure = False
         self.violation = None
 
-        logging.debug(f'Return from validate_dane():  {result}')
+        #logging.debug(f'Return from validate_dane():  {result}')
         if result == "no_tlsa":
             self.dane_used = False
             self.stats["no_tlsa"] += 1
@@ -145,13 +136,14 @@ class DANETLSAValidator:
             "dns_failed":    Error encountered during DNS query
             "dnssec_failed": DNSSEC validation failed
         """
-        #TODO: Move resolver config to CertGuardConfig.py for both dane.py and CertGuard.py checks
-        logging.warning(f"-----------------------------------Entering validate_dane()---------------------------------------------")
+        #TODO: Move resolver logic for both dane.py and CertGuard.py checks into helper_functions.py.
+        #TODO: Add support for DoH/DoQ to allow for safe use of public resolvers.
+        logging.warning(f"-----------------------------------Entering validate_dane()---------------------------------------")
         
 
         # Check cache
-        logging.debug(f'Cache contains TLSA records for: {list(self.cache.keys())}')
         cache_key = (hostname, port)
+        #logging.debug(f'Cache contains TLSA records for: {list(self.cache.keys())}')
         
         if cache_key in self.cache:
             logging.debug('Found TLSA record in session cache; skipping DNS query.')
@@ -166,8 +158,6 @@ class DANETLSAValidator:
 
             while got_response == False:
                 try:
-                    #TODO: Move resolver logic for both dane.py and CertGuard.py checks into helper_functions.py.
-                    #TODO: Add support for DoH/DoQ to allow for safe use of public resolvers.
                     current_resolver = CONFIG.resolvers[0]
                     logging.debug(f'Using resolver: {current_resolver}')
                     response = dns.query.udp_with_fallback(query, current_resolver, timeout=CONFIG.dns_timeout)
@@ -342,7 +332,7 @@ class DANETLSAValidator:
         - matching_type (0-2): How to match (0=Exact data match, 1=SHA-256, 2=SHA-512)
         - cert_data: The certificate data to match (either full cert or SPKI)
         """
-        logging.warning(f"-----------------------------------Entering check_tlsa_record()------------------------------------------")
+        #logging.warning(f"-----------------------------------Entering check_tlsa_record()------------------------------------------")
         usage = tlsa.usage
         selector = tlsa.selector
         matching_type = tlsa.mtype
@@ -355,7 +345,7 @@ class DANETLSAValidator:
             logging.error(f'Invalid DANE usage parameter: {usage}')
             return False, [f"Invalid DANE usage parameter: {usage}"]
 
-        # Set type for later checking by, and potential bypass of, get_root_cert() in main module.
+        # Set type for later checking by, and potential bypass of Root, CAA, and CT functions in main module.
         self.dane_usage_type = usage
 
         if usage == 0 or usage == 2:
@@ -406,16 +396,18 @@ class DANETLSAValidator:
                         self.dane_ta_data = computed
                     break
 
+            '''
             if match:
-                logging.info(f"TLSA match: \n"
-                    f"  - Certificate Usage:   {TLSA_Enum.Usage(usage).name} ({usage})\n" 
-                    f"  - Selector:            {TLSA_Enum.Selector(selector).name} ({selector})\n"
-                    f"  - Matching Type:       {TLSA_Enum.MatchingType(matching_type).name} ({matching_type})\n"
-                    f"  - Matched Data:        {computed.hex()}")
+                logging.info(f"TLSA match:")
+                logging.info(f"  - Certificate Usage:   {TLSA_Enum.Usage(usage).name} ({usage})") 
+                logging.info(f"  - Selector:            {TLSA_Enum.Selector(selector).name} ({selector})")
+                logging.info(f"  - Matching Type:       {TLSA_Enum.MatchingType(matching_type).name} ({matching_type})")
+                logging.info(f"  - Matched Data:        {computed.hex()}")
                 return match, None
             else:
                 dane_error = ['Could not match TLSA record(s) against presented TLS certificate(s)']
                 return match, dane_error
+            '''
         
         elif usage == 1 or usage == 3:
             if selector == 0:  # Full certificate
@@ -443,16 +435,16 @@ class DANETLSAValidator:
             # Compare
             match = computed == tlsa_cert_assoc_data
             
-            if match:
-                logging.info(f"TLSA match: \n"
-                    f"  - Certificate Usage:   {TLSA_Enum.Usage(usage).name} ({usage})\n" 
-                    f"  - Selector:            {TLSA_Enum.Selector(selector).name} ({selector})\n"
-                    f"  - Matching Type:       {TLSA_Enum.MatchingType(matching_type).name} ({matching_type})\n"
-                    f"  - Matched Data:        {computed.hex()}")
-                return match, None
-            else:
-                dane_error = ['Could not match TLSA record(s) against presented TLS certificate(s)']
-                return match, dane_error
+        if match:
+            logging.info(f"TLSA match:")
+            logging.info(f"  - Certificate Usage:          {TLSA_Enum.Usage(usage).name} ({usage})") 
+            logging.info(f"  - Selector:                   {TLSA_Enum.Selector(selector).name} ({selector})")
+            logging.info(f"  - Matching Type:              {TLSA_Enum.MatchingType(matching_type).name} ({matching_type})")
+            logging.info(f"  - Matched Data:               {computed.hex()}")
+            return match, None
+        else:
+            dane_error = ['Could not match TLSA record(s) against presented TLS certificate(s)']
+            return match, dane_error
     
     def verify_dnssec(self, response: dns.message.QueryMessage) -> bool:
         """
@@ -464,6 +456,7 @@ class DANETLSAValidator:
             logging.debug(f"DNSSEC check failed: {e}")
             return False
     
+
     def done(self):
         """Called when the add-on is unloaded."""
         print("DANE TLSA Validator statistics:")
@@ -471,7 +464,7 @@ class DANETLSAValidator:
         print(f"  Failed: {self.stats['dane_failed']}")
         print(f"  No TLSA: {self.stats['no_tlsa']}")
         print(f"  DNS Failed: {self.stats['dns_failed']}")
-        print(f"  DNSSEC Failed: {self.stats['dnssec_failed']}")
+        print(f"  DNSSEC Failed: {self.stats['dnssec_failed']}") 
 
 
 def get_dane_root(server_chain: Sequence[x509.Certificate], root_store: Sequence[x509.Certificate]) -> Tuple[Optional[x509.Certificate], Optional[str]]:
@@ -505,10 +498,10 @@ def get_dane_root(server_chain: Sequence[x509.Certificate], root_store: Sequence
                 logging.warning(f'Chain verified against Root CA: {root.subject.rfc4514_string()}')
                 return root, None
             except Exception as e:
-                logging.fatal(f"Root CA cert verification failed: {e}")
+                logging.error(f"Root CA cert verification failed: {e}")
                 continue
    
-    logging.fatal(f"No stored trust anchor cert found")
+    logging.error(f"No stored trust anchor cert found")
     try:
         return None, last_cert.issuer.get_attributes_for_oid(x509.NameOID.COMMON_NAME)[0].value
     except:

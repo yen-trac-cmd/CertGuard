@@ -49,6 +49,7 @@ class Config:
         self.filtering_mode    = cfg["country_filtering"]["filtering_mode"].lower()  # "allow" or "warn"
         self.restricted_roots  = cfg["controlled_roots"]["restricted_roots"]
         self.revocation_checks = cfg["tls_config"]["revocation_checks"]
+        self.certguard_checks  = cfg["tls_config"]["bypass_mitmproxy_checks"]
         self.prohibited_roots  = cfg["controlled_roots"]["prohibited_roots"]
         self.quick_check       = cfg["sct_config"]["quick_check"]
         self.verify_signatures = cfg["sct_config"]["verify_signatures"]
@@ -70,16 +71,16 @@ class Config:
 
         # Validate user-supplied config values
         if type(self.dns_timeout) != float:
-            logging.fatal(f"dns_timeout in config.toml must be configured as floating point value!")
+            logging.critical(f"dns_timeout in config.toml must be configured as floating point value!")
 
         if self.filtering_mode not in ['allow', 'warn']:
-            logging.fatal(f"Invalid country filtering mode defined in config.toml!")
+            logging.facriticaltal(f"Invalid country filtering mode defined in config.toml!")
 
         if self.intercept_mode not in ['compatible', 'strict']:
-            logging.fatal(f"Invalid 'intercept_mode' defined in config.toml!")
+            logging.critical(f"Invalid 'intercept_mode' defined in config.toml!")
 
         if self.token_mode not in ['header', 'post', 'get']:
-            logging.fatal(f"Invalid 'token_mode' defined in config.toml!")
+            logging.critical(f"Invalid 'token_mode' defined in config.toml!")
 
         for entries in [self.country_list, self.blocklist]:
             if not all(isinstance(country, str) and len(country) == 2 for country in entries):
@@ -93,7 +94,7 @@ class Config:
             try:
                 ipaddress.ip_address(ip)
             except ValueError:
-                logging.fatal(f"Invalid DNS resolver entry in config.toml: {ip}")
+                logging.critical(f"Invalid DNS resolver entry in config.toml: {ip}")
         self.resolvers = deque(self.user_resolvers)
 
         # Load Public Suffix List
@@ -115,8 +116,8 @@ class Config:
             logging.warning(f"...falling back to cached content. Check connectivity and site availability.")
             psl_response = session.get(PSL_URL, only_if_cached=True)
             if psl_response.status_code != 200:
-                logging.fatal(f'Cannot load Public Suffix List from network or local cache; failing closed.')
-                logging.fatal(f'Check network connectivity and site availability to {PSL_URL}')
+                logging.critical(f'Cannot load Public Suffix List from network or local cache; failing closed.')
+                logging.critical(f'Check network connectivity and site availability to {PSL_URL}')
                 sys.exit()
 
         if psl_response.from_cache:

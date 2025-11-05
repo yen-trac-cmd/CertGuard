@@ -1,9 +1,11 @@
 from cryptography import x509
+#import cryptography
+from cryptography import exceptions
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import dsa, ec, ed25519, ed448, padding, rsa
 from cryptography.x509 import ocsp
-from cryptography.x509.oid import NameOID
+from cryptography.x509.oid import ExtensionOID, NameOID, ExtendedKeyUsageOID
 from datetime import datetime, timezone
 from requests.exceptions import RequestException
 from typing import Tuple, Optional
@@ -26,7 +28,7 @@ def check_cert_chain_revocation(cert_chain: list[x509.Certificate], skip_leaf: b
         - (False, None, None) if all certificates are confirmed valid
         - (False, None, error_messages) if checks failed
     """
-    logging.warning(f"-----------------------------------Entering check_cert_chain_revocation()--------------------------------------------------")
+    logging.warning(f"-----------------------------------Entering check_cert_chain_revocation()-------------------------")
     if not cert_chain or len(cert_chain) == 0:
         return (False, "Empty certificate chain provided")
     
@@ -88,7 +90,7 @@ def check_cert_revocation(cert: x509.Certificate, issuer_cert: x509.Certificate,
         - (False, "", None, None) if certificate is confirmed valid
         - (False, "error message", None, None) if check failed
     """
-    logging.warning(f"-----------------------------------Entering check_cert_revocation()--------------------------------------------------")
+    logging.warning(f"-----------------------------------Entering check_cert_revocation()-------------------------------")
     logging.info(f"Checking revocation for {cert.subject.rfc4514_string()}")
     crl_result = None
     ocsp_result = None
@@ -105,8 +107,6 @@ def check_cert_revocation(cert: x509.Certificate, issuer_cert: x509.Certificate,
                 return (False, "", None, None)
             else:
                 errors.append(f"OCSP check returned: {return_msg}")
-        #elif ocsp_urls and not issuer_cert:
-        #    errors.append("OCSP URL found but no issuer certificate provided")
     except Exception as e:
         errors.append(f"OCSP check failed: {str(e)}")
     
@@ -201,7 +201,7 @@ def _get_ocsp_urls(cert: x509.Certificate) -> list:
 
 def _get_crl_urls(cert: x509.Certificate) -> list:
     """Extract CRL URLs from certificate's CRL Distribution Points (CDP) extension."""
-    logging.warning(f"-----------------------------------Entering _get_crl_urls()--------------------------------------------------")
+    logging.warning(f"-----------------------------------Entering _get_crl_urls()---------------------------------------")
     try:
         crl_dp = cert.extensions.get_extension_for_oid(
             x509.oid.ExtensionOID.CRL_DISTRIBUTION_POINTS
@@ -223,7 +223,7 @@ def _check_ocsp(cert: x509.Certificate, issuer_cert: x509.Certificate, cert_chai
     Check certificate status via OCSP.
     Returns (True, reason) if revoked, (False, None) if good, (None, None) if unknown/error.
     """
-    logging.warning(f"-----------------------------------Entering _check_ocsp()--------------------------------------------------")
+    logging.warning(f"-----------------------------------Entering _check_ocsp()-----------------------------------------")
     # Build OCSP request
     builder = ocsp.OCSPRequestBuilder()
     builder = builder.add_certificate(cert, issuer_cert, hashes.SHA1()) 
@@ -233,115 +233,110 @@ def _check_ocsp(cert: x509.Certificate, issuer_cert: x509.Certificate, cert_chai
     # Try each OCSP URL
     exception_messages = []
     for url in ocsp_urls:
-        #try:
-            headers = {
-                'Content-Type': 'application/ocsp-request',
-                'Accept': 'application/ocsp-response'
-            }
-            
-            logging.debug(f'Querying OCSP server {url} for cert serial number {cert.serial_number}')
-            try:
-                response = requests.post(url, data=req_data, headers=headers, timeout=timeout)
-            
-            except NameResolutionError as e:
-                exception_msg = f'DNS resolution failed for OCSP responder {url}'
-                logging.error(exception_msg + f':\n --> {e}')
-                exception_messages.append(exception_msg)
-                continue 
+        headers = {
+            'Content-Type': 'application/ocsp-request',
+            'Accept': 'application/ocsp-response'
+        }
+        
+        logging.debug(f'Querying OCSP server {url} for cert serial number {cert.serial_number}')
+        try:
+            response = requests.post(url, data=req_data, headers=headers, timeout=timeout)
+        
+        except NameResolutionError as e:
+            exception_msg = f'DNS resolution failed for OCSP responder {url}'
+            logging.error(exception_msg + f':\n --> {e}')
+            exception_messages.append(exception_msg)
+            continue 
 
-            except RequestException as e:
-                exception_msg = f"Error querying <code>{url}</code>."
-                logging.error(exception_msg + f':\n --> {e}')
-                exception_messages.append(exception_msg)
-                continue
+        except RequestException as e:
+            exception_msg = f"Error querying <code>{url}</code>."
+            logging.error(exception_msg + f':\n --> {e}')
+            exception_messages.append(exception_msg)
+            continue
 
-            except Exception as e:
-                exception_msg = f'Encountered other exception trying to query OCSP server:\n{e}'
-                logging.error(exception_msg)
-                exception_messages.append(exception_msg)
-                continue
+        except Exception as e:
+            exception_msg = f'Encountered other exception trying to query OCSP server:\n{e}'
+            logging.error(exception_msg)
+            exception_messages.append(exception_msg)
+            continue
+        
+        if response.status_code != 200:
+            error_msg = f'Received HTTP response code {response.status_code} querying OCSP server; skipping server.'
+            logging.error(error_msg)
+            exception_messages.append(error_msg)
+            continue
+
+        try:
+            ocsp_resp = ocsp.load_der_ocsp_response(response.content)
+        except ValueError as e:
+            exception_msg = f"Error parsing OCSP response: {e}"
+            logging.error(exception_msg)
+            exception_messages.append(exception_msg)
+            continue
+        
+        if ocsp_resp.response_status == ocsp.OCSPResponseStatus.SUCCESSFUL:
+            logging.debug("The OCSP request was successful.")
+        elif ocsp_resp.response_status == ocsp.OCSPResponseStatus.UNAUTHORIZED:
+            logging.error(f"The OCSP responder is unauthorized to respond for check against {cert.subject.rfc4514_string()}; skipping server.")
+            continue
+        elif ocsp_resp.response_status == ocsp.OCSPResponseStatus.MALFORMED_REQUEST:
+            logging.error("The OCSP request was malformed; skipping server.")
+            continue
+        else:
+            logging.error(f"A non-successful status was received: {ocsp_resp.response_status.name}; skipping server.")
+            continue
+        
+        # Log info about cert being checked & OCSP response data for debugging purposes
+        logging.debug("OCSP Response Details:")
+        for single_resp in ocsp_resp.responses:
+            logging.debug(" Single Response")
+            logging.debug(f" - Cert Serial Number:  {single_resp.serial_number}")
+            logging.debug(f" - Serial Number (Hex): {hex(single_resp.serial_number)}")
+            logging.debug(f" - Certificate Status:  {single_resp.certificate_status.name}")
+            logging.debug(f" - This Update:         {single_resp.this_update_utc}")
+            logging.debug(f" - Next Update:         {single_resp.next_update_utc}")
             
-            if response.status_code != 200:
-                error_msg = f'Received HTTP response code {response.status_code} querying OCSP server; skipping server.'
-                logging.error(error_msg)
-                exception_messages.append(error_msg)
-                continue
-
-            try:
-                ocsp_resp = ocsp.load_der_ocsp_response(response.content)
-            except ValueError as e:
-                exception_msg = f"Error parsing OCSP response: {e}"
-                logging.error(exception_msg)
-                exception_messages.append(exception_msg)
-                continue
-           
-            if ocsp_resp.response_status == ocsp.OCSPResponseStatus.SUCCESSFUL:
-                logging.debug("The OCSP request was successful.")
-            elif ocsp_resp.response_status == ocsp.OCSPResponseStatus.UNAUTHORIZED:
-                logging.error(f"The OCSP responder is unauthorized to respond for check against {cert.subject.rfc4514_string()}; skipping server.")
-                continue
-            elif ocsp_resp.response_status == ocsp.OCSPResponseStatus.MALFORMED_REQUEST:
-                logging.error("The OCSP request was malformed; skipping server.")
-                continue
-            else:
-                logging.error(f"A non-successful status was received: {ocsp_resp.response_status.name}; skipping server.")
-                continue
+            if single_resp.certificate_status == ocsp.OCSPCertStatus.REVOKED:
+                logging.debug(f" - Revocation Time:     {single_resp.revocation_time_utc}")
+                if single_resp.revocation_reason:
+                    logging.debug(f" - Revocation Reason:   {single_resp.revocation_reason}")
+                else:
+                    logging.debug(" - Revocation Reason:   Unspecified")
             
-            # Log info about cert being checked & OCSP response data for debugging purposes
-            logging.debug("OCSP Response Details:")
-            for single_resp in ocsp_resp.responses:
-                logging.debug(" Single Response")
-                logging.debug(f" - Cert Serial Number:  {single_resp.serial_number}")
-                logging.debug(f" - Serial Number (Hex): {hex(single_resp.serial_number)}")
-                logging.debug(f" - Certificate Status:  {single_resp.certificate_status.name}")
-                logging.debug(f" - This Update:         {single_resp.this_update_utc}")
-                logging.debug(f" - Next Update:         {single_resp.next_update_utc}")
-                
-                if single_resp.certificate_status == ocsp.OCSPCertStatus.REVOKED:
-                    logging.debug(f" - Revocation Time:     {single_resp.revocation_time_utc}")
-                    if single_resp.revocation_reason:
-                        logging.debug(f" - Revocation Reason:   {single_resp.revocation_reason}")
-                    else:
-                        logging.debug(" - Revocation Reason:   Unspecified")
-                
-            # Log response metadata
-            if ocsp_resp.responder_key_hash:
-                logging.debug(f" - Responder Key Hash:  {ocsp_resp.responder_key_hash.hex()}")
-            if ocsp_resp.responder_name:
-                logging.debug(f" - Responder Name:      {ocsp_resp.responder_name}")
-            logging.debug(f" - Produced At:         {ocsp_resp.produced_at_utc}")
-            logging.debug(f" - Signature Hash Algo: {ocsp_resp.signature_hash_algorithm.name}")
+        # Log response metadata
+        if ocsp_resp.responder_key_hash:
+            logging.debug(f" - Responder Key Hash:  {ocsp_resp.responder_key_hash.hex()}")
+        if ocsp_resp.responder_name:
+            logging.debug(f" - Responder Name:      {ocsp_resp.responder_name}")
+        logging.debug(f" - Produced At:         {ocsp_resp.produced_at_utc}")
+        logging.debug(f" - Signature Hash Algo: {ocsp_resp.signature_hash_algorithm.name}")
+        
+        # Log any extensions
+        if ocsp_resp.extensions:
+            logging.debug(" Extensions:")
+            for ext in ocsp_resp.single_extensions:
+                logging.debug(f"  - {ext.oid._name}: {ext.value}")
+        else:
+            logging.debug(" - OCSP Extensions:     (None found)")
 
-            
-            # Log any extensions
-            if ocsp_resp.extensions:
-                logging.debug(" Extensions:")
-                for ext in ocsp_resp.single_extensions:
-                    logging.debug(f"  - {ext.oid._name}: {ext.value}")
-            else:
-                logging.debug(" - OCSP Extensions:     (None found)")
+        signature_verified = validate_ocsp_signature(ocsp_resp, cert_chain, issuer_cert)
+        if not signature_verified:
+            logging.error(f'Digitial signature verification on OCSP response failed.')
+            continue
 
-            signature_verified = validate_ocsp_signature(ocsp_resp, cert_chain, issuer_cert)
-            if not signature_verified:
-                logging.error(f'Digitial signature verification on OCSP response failed.')
-                continue
+        cert_status = ocsp_resp.certificate_status
+        if cert_status == ocsp.OCSPCertStatus.GOOD:
+            logging.info('Certificate OCSP revocation check returned status: GOOD.')
+            return (False, None)
+        elif cert_status == ocsp.OCSPCertStatus.REVOKED:
+            # Try to get revocation reason
+            reason = _get_ocsp_revocation_reason(ocsp_resp)
+            logging.error(f'Certificate confirmed REVOKED via OCSP check due to: {reason}')
+            return (True, reason)
+        else: # UNKNOWN status - try next URL
+            logging.error('Certificate OCSP revocation check returned status = UNKNOWN.')
+            continue
 
-            cert_status = ocsp_resp.certificate_status
-            if cert_status == ocsp.OCSPCertStatus.GOOD:
-                logging.info('Certificate OCSP revocation check returned status: GOOD.')
-                return (False, None)
-            elif cert_status == ocsp.OCSPCertStatus.REVOKED:
-                # Try to get revocation reason
-                reason = _get_ocsp_revocation_reason(ocsp_resp)
-                logging.error(f'Certificate confirmed REVOKED via OCSP check due to: {reason}')
-                return (True, reason)
-            else: # UNKNOWN status - try next URL
-                logging.error('Certificate OCSP revocation check returned status = UNKNOWN.')
-                continue
-            
-        #except Exception as e:
-        #    logging.error(f'Encountered exception attempting to query OCSP: {e}')
-        #    continue
     return (None, "\n".join(exception_messages))
     
 def _check_crl(cert: x509.Certificate, crl_urls: list, issuer_cert: x509.Certificate, timeout: int) -> Tuple[Optional[bool], Optional[str]]:
@@ -349,7 +344,7 @@ def _check_crl(cert: x509.Certificate, crl_urls: list, issuer_cert: x509.Certifi
     Check certificate status via CRL.
     Returns (True, reason) if revoked, (False, None) if not revoked, (None, None) if error.
     """
-    logging.warning(f"-----------------------------------Entering _check_crl()--------------------------------------------------")
+    logging.warning(f"-----------------------------------Entering _check_crl()------------------------------------------")
     cert_serial = cert.serial_number
     logging.debug(f'Cert serial number: {cert_serial}')
 
@@ -414,91 +409,132 @@ def _check_crl(cert: x509.Certificate, crl_urls: list, issuer_cert: x509.Certifi
 
 def validate_ocsp_signature(ocsp_resp: ocsp.OCSPResponse, cert_chain, issuer_cert: x509.Certificate = None) -> bool:
         """Validate the OCSP response signature against the certificate chain"""
-        try:
-            if issuer_cert:
-                pass
-            else:
-                # Convert PyOpenSSL certificate chain to cryptography certificates 
-                # Only applicable for stapled OCSP check called from tls_extensions module
-                issuer_cert = None
-                if cert_chain and len(cert_chain) > 1:
-                    issuer_openssl = cert_chain[1]
-                    # Convert to x509.Certificate object
+        if issuer_cert:
+            pass
+        else:
+            # Convert PyOpenSSL certificate chain to cryptography certificates 
+            # Only applicable for stapled OCSP check called from tls_extensions module
+            issuer_cert = None
+            if cert_chain and len(cert_chain) > 1:
+                issuer_openssl = cert_chain[1]
+                # Convert to x509.Certificate object
+                try:
+                    issuer_cert = issuer_openssl.to_cryptography()
+                except AttributeError:
+                    # Fallback: export as PEM and re-import
                     try:
-                        issuer_cert = issuer_openssl.to_cryptography()
-                    except AttributeError:
-                        # Fallback: export as PEM and re-import
-                        try:
-                            issuer_pem = issuer_openssl.public_bytes(serialization.Encoding.PEM)
-                            issuer_cert = x509.load_pem_x509_certificate(issuer_pem)
-                        except Exception as e:
-                            logging.warning(f"Could not convert issuer certificate: {e}")
-                            return False
-            
-            if not issuer_cert:
-                logging.warning("Could not extract issuer certificate from chain")
-                return False
-            
-            candidate_responder_certs = []
+                        issuer_pem = issuer_openssl.public_bytes(serialization.Encoding.PEM)
+                        issuer_cert = x509.load_pem_x509_certificate(issuer_pem)
+                    except Exception as e:
+                        logging.warning(f"Could not convert issuer certificate: {e}")
+                        return False
+                except Exception as e:
+                    logging.error(f'Unexpected exception encountered: {e}')
+        
+        logging.debug(f'Issuer cert subject: {issuer_cert.subject.rfc4514_string()}')
+        logging.debug(f'Issuer cert digest:  {issuer_cert.fingerprint(hashes.SHA256()).hex()}')
 
-            # Check if the OCSP response includes certificates (for delegated responders)
-            if ocsp_resp.certificates:
-                # Try to validate using the certificates included in the OCSP response
-                for ocsp_cert in ocsp_resp.certificates:
-                    logging.info(f'Found embedded certificate in OCSP response:')
-                    logging.info(f'   - Subject: {ocsp_cert.subject.rfc4514_string()}')
-                    logging.info(f'   - Issuer:  {ocsp_cert.issuer.rfc4514_string()}')
-
-                    # Check for delegated responder use
-                    try:
-                        eku = ocsp_cert.extensions.get_extension_for_oid(x509.ExtensionOID.EXTENDED_KEY_USAGE).value
-                        if x509.ExtendedKeyUsageOID.OCSP_SIGNING in eku:
-                            logging.info("   - Cert has the necessary OCSP responder Extended Key Usage (EKU).")
-                            candidate_responder_certs.append(ocsp_cert)
-                        else:
-                            logging.error("Embedded cert not marked for OCSP signing.")
-                    except x509.ExtensionNotFound:
-                        logging.error("No Extended Key Usage extension found.")
-            
-            if not candidate_responder_certs:
-                logging.info('No delegated responder cert(s) found; using issuing CA certificate for OCSP signature verification.')
-                candidate_responder_certs = [issuer_cert]
-                    
-            # Verify OCSP response signature
-            data_to_verify = ocsp_resp.tbs_response_bytes  # raw signed bytes
-            signature = ocsp_resp.signature
-            signature_hash_algorithm = ocsp_resp.signature_hash_algorithm
-
-            for responder_cert in candidate_responder_certs:
-                pubkey = responder_cert.public_key()
+        if not issuer_cert:
+            logging.warning("Could not extract issuer certificate from chain")
+            return False
+        
+        # Check if the OCSP response includes certificates (for delegated responders)
+        candidate_responder_certs = []
+        if ocsp_resp.certificates:
+            # Try to validate using the certificates included in the OCSP response
+            #logging.error(f'Number of embedded delegated OCSP responder certs: {len(ocsp_resp.certificates)}')
+            for ocsp_cert in ocsp_resp.certificates:
+                logging.info(f'Found embedded certificate in OCSP response:')
+                logging.info(f'   - Subject: {ocsp_cert.subject.rfc4514_string()}')
+                logging.info(f'   - Issuer:  {ocsp_cert.issuer.rfc4514_string()}')
+                logging.info(f'   - Serial:  {ocsp_cert.serial_number}')
+                logging.info(f'   - Digest:  {ocsp_cert.fingerprint(hashes.SHA256()).hex()}')
+                #logging.debug(f'Cert PEM:\n{ (ocsp_cert.public_bytes(serialization.Encoding.PEM)).decode()  }')
                 
                 try:
-                    if isinstance(pubkey, rsa.RSAPublicKey):
-                        pubkey.verify(signature, data_to_verify, padding.PKCS1v15(), signature_hash_algorithm)
-                    elif isinstance(pubkey, ec.EllipticCurvePublicKey):
-                        pubkey.verify(signature, data_to_verify, ec.ECDSA(signature_hash_algorithm))
-                    elif isinstance(pubkey, (ed25519.Ed25519PublicKey, ed448.Ed448PublicKey)):
-                        pubkey.verify(signature, data_to_verify)
-                    else:
-                        logging.error(f"Unsupported public key type: {type(pubkey)}")
-                        continue
-            
-                    # If reach here, validation for one of the methods above was successful.
-                    logging.info(f"Verified digital signature on OCSP response; signed by: {responder_cert.subject.rfc4514_string()}")
-                    return True
-                except InvalidSignature:
-                    logging.error(f"OCSP response digital signature verification failed with {responder_cert.subject.rfc4514_string()}: {e}")
+                    ocsp_cert.verify_directly_issued_by(issuer_cert)
+                except Exception as e:
+                    logging.debug(f"OCSP responder cert not issued by CA: {e}")
+                    continue
+                
+                # Delegated responders MUST have id-kp-OCSPSigning EKU per RFC6960, but I'm encountering a parser bug in the Cryptography library
+                # Parse raw DER bytes as an interim workaround
+                try:
+                    eku = ocsp_cert.extensions.get_extension_for_oid(x509.ExtensionOID.EXTENDED_KEY_USAGE).value
+                    if x509.ExtendedKeyUsageOID.OCSP_SIGNING in eku:
+                        logging.info("   - Cert has the necessary OCSP Responder Signing Extended EKU (OID 1.3.6.1.5.5.7.3.9).")
+                        candidate_responder_certs.append(ocsp_cert)
+                        has_ocsp_signing = True
+                except x509.ExtensionNotFound:
+                    logging.error("No Extended Key Usage extension found .")
                     continue
                 except Exception as e:
-                    logging.error(f'Unexpected exception encountered while attempting to verify digital signature: {e}')
-                    continue
-            
-            logging.error("All candidate certificates failed to verify OCSP response signature.")
-            return False                    
+                    logging.error(f'Encountered exception attempting to check EKUs for OCSP responder certificate: {e}')
+                    # Parsing error - work around by checking raw DER bytes
+                    logging.warning(f"Attempting to validate against raw DER data as a workaround to parsing bugs...")
+                    try:
+                        # Get the raw certificate DER
+                        cert_der = ocsp_cert.public_bytes(serialization.Encoding.DER)
 
-        except Exception as e:
-            logging.error(f"Error validating OCSP signature: {e}")
-            return False
+                        # OID for Extended Key Usage: 2.5.29.37
+                        eku_oid = b'\x06\x03\x55\x1d\x25'
+                        # OID for OCSP Signing: 1.3.6.1.5.5.7.3.9
+                        ocsp_signing_oid = b'\x06\x08\x2b\x06\x01\x05\x05\x07\x03\x09'
+                        
+                        # Check if both OIDs are present in the DER
+                        if eku_oid in cert_der and ocsp_signing_oid in cert_der:
+                            logging.info("Found OCSP_SIGNING EKU in raw DER (bypassed parsing bug)")
+                            #has_ocsp_signing = True
+                            candidate_responder_certs.append(ocsp_cert)
+                        else:
+                            logging.warning("OCSP_SIGNING EKU not found in raw DER")
+                    except Exception as e2:
+                        logging.error(f"Failed to check raw DER: {e2}")
+                        continue
+                
+                if not candidate_responder_certs:
+                    logging.warning("OCSP cert issued by CA but missing OCSP_SIGNING EKU - invalid per RFC 6960")
+
+        if candidate_responder_certs:
+            logging.info("Found valid delegated OCSP responder certificate with OCSP_SIGNING EKU")
+        else:
+            logging.info('No [verified] delegated responder cert(s) found; attempting to use issuing CA certificate for OCSP signature verification.')
+            candidate_responder_certs = [issuer_cert]
+                
+        # Verify OCSP response signature
+        verified = False
+        data_to_verify = ocsp_resp.tbs_response_bytes  # raw signed bytes
+        signature = ocsp_resp.signature
+        signature_hash_algorithm = ocsp_resp.signature_hash_algorithm
+
+        for responder_cert in candidate_responder_certs:
+            pubkey = responder_cert.public_key()
+            try:
+                if isinstance(pubkey, rsa.RSAPublicKey):
+                    logging.debug('Responder public key type: RSA')
+                    pubkey.verify(signature, data_to_verify, padding.PKCS1v15(), signature_hash_algorithm)
+                    verified = True
+                elif isinstance(pubkey, ec.EllipticCurvePublicKey):
+                    logging.debug('Responder public key type: EC')
+                    pubkey.verify(signature, data_to_verify, ec.ECDSA(signature_hash_algorithm))
+                    verified = True
+                elif isinstance(pubkey, (ed25519.Ed25519PublicKey, ed448.Ed448PublicKey)):
+                    logging.debug('Responder public key type: ed25519')
+                    pubkey.verify(signature, data_to_verify)
+                    verified = True
+                else:
+                    logging.error(f"Unsupported public key type: {type(pubkey)}")
+                    continue
+            except exceptions.InvalidSignature:
+                logging.error(f'Signature could not be verified against the attempted responder public key.')
+                continue
+            
+            if verified:
+                logging.info(f"Verified digital signature on OCSP response; signed by: {responder_cert.subject.rfc4514_string()}")
+                return True
+
+        logging.error("Could not verify OCSP response signature against OCSP responder signing certificate(s).")
+        return False                    
 
 def validate_crl_signature(crl: x509.CertificateRevocationList, issuer_cert: x509.Certificate):
     """Validate the CRL signature against the issuer certificate

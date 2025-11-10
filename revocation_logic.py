@@ -551,18 +551,18 @@ def validate_crl_signature(crl: x509.CertificateRevocationList, issuer_cert: x50
         now = datetime.now(timezone.utc)
         
         if crl.last_update_utc > now:
-            logging.error("[Validation] CRL last_update is in the future")
+            logging.error("CRL last_update is in the future")
             return False
         
         if crl.next_update_utc and crl.next_update_utc < now:
-            logging.error("[Validation] CRL has expired (next_update passed)")
+            logging.error("CRL has expired (next_update passed)")
             # Don't return False - expired CRL is still valid, just stale
         
                    # Check if CRL issuer matches the certificate issuer
         if crl.issuer != issuer_cert.subject:
-            logging.warning("[Validation] CRL issuer does not match certificate issuer")
-            logging.warning(f"[Validation] CRL Issuer: {crl.issuer.rfc4514_string()}")
-            logging.warning(f"[Validation] Cert Issuer: {issuer_cert.subject.rfc4514_string()}")
+            logging.warning("CRL issuer does not match certificate issuer")
+            logging.warning(f"CRL Issuer: {crl.issuer.rfc4514_string()}")
+            logging.warning(f"Cert Issuer: {issuer_cert.subject.rfc4514_string()}")
             
             # Check Authority Key Identifier
             try:
@@ -578,14 +578,14 @@ def validate_crl_signature(crl: x509.CertificateRevocationList, issuer_cert: x50
                     issuer_ski = issuer_ski_ext.value.key_identifier
                     
                     if crl_aki != issuer_ski:
-                        logging.warning("[Validation] CRL signed by different authority (delegated CRL signer)")
+                        logging.warning("CRL signed by different authority (delegated CRL signer)")
                         return False
                 except x509.ExtensionNotFound:
-                    logging.error("[Validation] Issuer cert missing Subject Key Identifier")
+                    logging.error("Issuer cert missing Subject Key Identifier")
                     return False
                     
             except x509.ExtensionNotFound:
-                logging.error("[Validation] CRL missing Authority Key Identifier")
+                logging.error("CRL missing Authority Key Identifier")
                 return False
         
         # Perform actual cryptographic signature verification
@@ -601,7 +601,7 @@ def validate_crl_signature(crl: x509.CertificateRevocationList, issuer_cert: x50
             hash_algorithm = get_hash_algorithm_from_oid(sig_oid)
             
             if hash_algorithm is None:
-                logging.error(f"[Validation] Unsupported signature algorithm: {sig_oid.dotted_string}")
+                logging.error(f"Unsupported signature algorithm: {sig_oid.dotted_string}")
                 return False
             
             # Verify signature based on key type
@@ -633,22 +633,22 @@ def validate_crl_signature(crl: x509.CertificateRevocationList, issuer_cert: x50
                         tbs_cert_list,
                         hash_algorithm
                     )
-                    logging.info("[Validation] ✓ CRL DSA signature verified successfully")
+                    logging.info("CRL DSA signature verified successfully")
                     return True
                 except InvalidSignature:
-                    logging.error("[Validation] ✗ CRL DSA signature verification FAILED")
+                    logging.error("CRL DSA signature verification FAILED")
                     return False
                     
             else:
-                logging.warning(f"[Validation] Unsupported public key type: {type(public_key)}")
+                logging.warning(f"Unsupported public key type: {type(public_key)}")
                 return False
                 
         except Exception as e:
-            logging.error(f"[Validation] Error during CRL signature verification: {e}")
+            logging.error(f"Error during CRL signature verification: {e}")
             return False
         
     except Exception as e:
-        logging.error(f"[Validation] Error validating CRL signature: {e}")
+        logging.error(f"Error validating CRL signature: {e}")
         return False
 
 def get_hash_algorithm_from_oid(sig_oid):

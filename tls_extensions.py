@@ -7,7 +7,7 @@ from cryptography.x509 import ocsp, UnrecognizedExtension
 from revocation_logic import validate_ocsp_signature
 #from cryptography.hazmat.primitives import serialization
 #from cryptography.hazmat.primitives.asymmetric import ec, ed25519, ed448, padding, rsa
-from cryptography import x509
+#from cryptography import x509
 
 CONFIG = Config()
 

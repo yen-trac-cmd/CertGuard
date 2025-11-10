@@ -5,14 +5,14 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519, ed448, dsa, padding
 from cryptography.x509 import ObjectIdentifier, UnrecognizedExtension
-from cryptography.x509.oid import ExtensionOID, NameOID, ExtendedKeyUsageOID
-from cryptography.x509.extensions import SubjectKeyIdentifier
+#from cryptography.x509.oid import ExtensionOID, NameOID, ExtendedKeyUsageOID
+#from cryptography.x509.extensions import SubjectKeyIdentifier
 from dane import DANETLSAValidator
 from datetime import datetime, timedelta, timezone
 from dns.rdtypes.ANY import CAA
 from dns.resolver import dns
 from error_screen import error_screen
-from helper_functions import calculate_ski, get_cert_domains, supported_ciphers_list
+from helper_functions import calculate_ski, get_cert_domains, supported_ciphers_list, deduplicate_chain
 from logging.handlers import RotatingFileHandler
 from mitmproxy import ctx, http, addonmanager
 from tls_extensions import OCSPStaplingConfig
@@ -221,6 +221,12 @@ def get_root_cert(server_chain: Sequence[x509.Certificate], root_store: Sequence
     logging.warning(f"-----------------------------------Entering get_root_cert()---------------------------------------")
     logging.info(f'Number of certifi + custom trusted root CA entries: {len(root_store)}')
 
+    for i, cert in enumerate(server_chain):
+        logging.debug(f'Cert #{i}: {cert.subject.rfc4514_string()}, Fingerprint: {cert.fingerprint(hashes.SHA256()).hex()}')
+
+    # Remove duplicate certs to compensate for misconfigured servers
+    server_chain = deduplicate_chain(server_chain)
+
     # Verify each link in the chain, starting from leaf and working up to the last interemediate CA cert
     for issuer, subject in zip(server_chain[1:], server_chain[:-1]):
         try:
@@ -310,6 +316,11 @@ def verify_signature(subject: x509.Certificate, issuer: x509.Certificate) -> Non
     
     Handles RSA (PKCS#1 v1.5 and basic PSS), ECDSA, Ed25519/Ed448, and DSA.
     """
+    #from cryptography.hazmat.primitives import serialization
+    #logging.error(f'Subject PEM bytes: {(subject.public_bytes(serialization.Encoding.PEM)).decode("utf-8")}')
+    #logging.info('-----------------------------------')
+    #logging.error(f'Issuer PEM bytes: {(issuer.public_bytes(serialization.Encoding.PEM)).decode("utf-8")}')
+        
     pub = issuer.public_key()
     oid = subject.signature_algorithm_oid
     h = subject.signature_hash_algorithm  # a HashAlgorithm instance, or None for EdDSA
@@ -326,20 +337,14 @@ def verify_signature(subject: x509.Certificate, issuer: x509.Certificate) -> Non
                 algorithm=h,
             )
         else:
-            pub.verify(
-                signature=subject.signature,
-                data=subject.tbs_certificate_bytes,
-                padding=padding.PKCS1v15(),
-                algorithm=h,
-            )
+            #try:
+            pub.verify(signature=subject.signature, data=subject.tbs_certificate_bytes, padding=padding.PKCS1v15(), algorithm=h)
+            #except Exception as e:
+            #    logging.critical(f'Error: {e}')
 
     elif isinstance(pub, ec.EllipticCurvePublicKey):
         # ECDSA takes a signature algorithm wrapper with the hash
-        pub.verify(
-            signature=subject.signature,
-            data=subject.tbs_certificate_bytes,
-            signature_algorithm=ec.ECDSA(h),
-        )
+        pub.verify(signature=subject.signature, data=subject.tbs_certificate_bytes, signature_algorithm=ec.ECDSA(h))
 
     elif isinstance(pub, ed25519.Ed25519PublicKey):
         pub.verify(subject.signature, subject.tbs_certificate_bytes)
@@ -348,11 +353,7 @@ def verify_signature(subject: x509.Certificate, issuer: x509.Certificate) -> Non
         pub.verify(subject.signature, subject.tbs_certificate_bytes)
 
     elif isinstance(pub, dsa.DSAPublicKey):
-        pub.verify(
-            signature=subject.signature,
-            data=subject.tbs_certificate_bytes,
-            algorithm=h,
-        )
+        pub.verify(signature=subject.signature, data=subject.tbs_certificate_bytes, algorithm=h,)
 
     else:
         raise TypeError(f"Unsupported public key type: {type(pub)}")
@@ -502,7 +503,7 @@ def revocation_checks(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[Erro
         return ErrorLevel.NONE, None
     
     # Build cert chain provided by server
-    cert_chain = [cert.to_cryptography() for cert in flow.server_conn.certificate_list] 
+    cert_chain = deduplicate_chain([cert.to_cryptography() for cert in flow.server_conn.certificate_list])
     
     # Add root cert to complete the chain, provided that it's not already supplied in the chain.
     if not cert_chain[-1].subject == cert_chain[-1].issuer:
@@ -1043,9 +1044,13 @@ def dane_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel,
     logging.debug(f'dane_validator.dane_failure:   {dane_validator.dane_failure}')
     logging.debug(f'dane_validator.violation:      {dane_validator.violation}')
 
-    if dane_validator.dnssec_failure == True or dane_validator.dane_failure == True:
-        violation = dane_validator.violation
-        return ErrorLevel.FATAL, f'{violation}'    
+    if dane_validator.dane_failure == True and CONFIG.enforce_dane:
+        logging.error("DANE validation against published TLSA record failed; blocking request per 'enforce_dane' configuration.")
+        return ErrorLevel.FATAL, f'{dane_validator.violation}'
+    elif dane_validator.dnssec_failure == True and CONFIG.require_dnssec:
+        return ErrorLevel.FATAL, f'{dane_validator.violation}'
+    elif dane_validator.dane_failure or dane_validator.dnssec_failure:
+        return ErrorLevel.CRIT, f'{dane_validator.violation}'
     
     return ErrorLevel.NONE, None
 #====================================================================== Main ===================================================================

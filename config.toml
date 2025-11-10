@@ -110,7 +110,7 @@ verify_inclusion = true
 [dane_config]
 # Configures options for DNS-Based Authentication of Named Entities (DANE) verification.
 # Set 'enforce_dane' to true to raise a Level-6 Warning (e.g. hard block) for sites that are configured for DANE but fail validation.
-enforce_dane = true
+enforce_dane = false
 
 # Set 'require_dnssec' to true to ensure that TLSA resource record lookups are validated via DNSSEC (per DANE specification).
 # Note: This option only exists for experimentation purposes.  For production use cases, DNSSEC is mandatory!

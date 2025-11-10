@@ -5,6 +5,7 @@ __pycache__/
 
 # CertGuard private content
 custom_roots/
+scripts/
 *.db
 *.log
 

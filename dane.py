@@ -1,16 +1,3 @@
-"""
-mitmproxy add-on implementing RFC 6698 DANE protocol for TLSA record validation.
-
-This add-on validates HTTPS connections using TLSA records (if present) from DNSSEC-signed zones.
-It checks certificate associations according to the DANE specification.
-
-Usage:
-    mitmproxy -s dane_tlsa_addon.py
-
-Requirements:
-    pip install mitmproxy dnspython cryptography
-"""
-
 import dns
 import dns.edns
 import dns.exception
@@ -26,6 +13,7 @@ from CertGuardConfig import Config
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization #, hashes
 from enum import IntEnum
+from helper_functions import get_ede_description
 from mitmproxy import connection #tls, http, certs
 from typing import Sequence, Optional, Tuple
 
@@ -112,11 +100,8 @@ class DANETLSAValidator:
         elif result == "dane_failed":
             self.dane_failure = True
             self.stats["dane_failed"] += 1
-            logging.error(f"DANE validation FAILED for {hostname}.")
-            if CONFIG.enforce_dane:
-                logging.error("DANE validation against published TLSA record failed; blocking request per 'enforce_dane' configuration.")
-                self.violation = f"⛔ DANE validation against published TLSA record failed.{f'<br>&emsp;&emsp;▶ ' + ", ".join(validation_error) if validation_error else ''}"
-                self.dane_failure = True
+            logging.error(f"DANE validation against published TLSA record for {hostname} failed.")
+            self.violation = f"⛔ DANE validation against published TLSA record failed.{f'<br>&emsp;&emsp;▶ ' + ", ".join(validation_error) if validation_error else ''}"
         else:
             logging.error('Unexpected condition; failing closed')
             self.violation = f"⛔ Unepxected error encountered during DANE checks.{f'<br>&emsp;&emsp;▶ ' + ", ".join(validation_error) if validation_error else ''}"
@@ -196,98 +181,22 @@ class DANETLSAValidator:
                         if isinstance(opt, dns.edns.EDEOption):
                             # Note: opt objects also expose discrete .code and .text attributes (if returned by server).
                             logging.warning(f"Encountered {opt.to_text()}")
-                            ede_errors.append(opt.to_text())
-                            
-                            '''
-                            # Extract EDE information as defined in https://www.rfc-editor.org/rfc/rfc8914.html.
-                            if opt.code == 0:
-                                logging.warning(f"Other/unspecified error: {opt.text}")
-                                return "dns_failed"
-                            elif opt.code == 1:
-                                logging.warning("Unsupported DNSKEY Algorithm.")
-                                return "dnssec_failed"
-                            elif opt.code == 2:
-                                logging.warning("Unsupported DS Digest Type.")
-                                return "dnssec_failed"
-                            elif opt.code == 3:
-                                logging.warning("Stale DNSSEC answer.")
-                                return "dnssec_failed"
-                            elif opt.code == 4:
-                                logging.warning("Forged DNSSEC answer.")
-                                return "dnssec_failed"
-                            elif opt.code == 5:
-                                logging.warning("DNSSEC Indeterminate error.")
-                                return "dnssec_failed"
-                            elif opt.code == 6:
-                                logging.warning("Invalid signature ('DNSSEC Bogus').")
-                                return "dnssec_failed"
-                            elif opt.code == 7:
-                                logging.warning("DNSSEC signature expired.")
-                                return "dnssec_failed"
-                            elif opt.code == 8:
-                                logging.warning("DNSSEC signature not yet valid.")
-                                return "dnssec_failed"
-                            elif opt.code == 9:
-                                logging.warning("DNSSEC DNSKEY missing.")
-                                return "dnssec_failed"
-                            elif opt.code == 10:
-                                logging.warning("DNSSEC RRSIGs missing.")
-                                return "dnssec_failed"
-                            elif opt.code == 11:
-                                logging.warning("No Zone Key Bit Set.")
-                                return "dnssec_failed"
-                            elif opt.code == 12:
-                                logging.warning("NSEC Missing.")
-                                return "dnssec_failed"
-                            elif opt.code == 13:
-                                logging.warning("Resolver returned SERVFAIL RCODE from cache.")
-                                return "dns_failed"
-                            elif opt.code == 14:
-                                logging.warning("Server Not Ready.")
-                                return "dns_failed"
-                            elif opt.code == 15:
-                                logging.warning("Domain blocklisted by DNS server operator.")
-                                return "dns_failed"
-                            elif opt.code == 16:
-                                logging.warning("Domain Censored.")
-                                return "dns_failed"
-                            elif opt.code == 17:
-                                logging.warning("Domain Filtered as requested by client.")
-                                return "dns_failed"
-                            elif opt.code == 18:
-                                logging.warning("Request Prohibited; client unauthorized.")
-                                return "dns_failed"
-                            elif opt.code == 19:
-                                logging.warning("Stale NXDOMAIN answer.")
-                                return "dns_failed"
-                            elif opt.code == 20:
-                                logging.warning("Not Authoritative.")
-                                return "dns_failed"
-                            elif opt.code == 21:
-                                logging.warning("Requested operation or query not supported.")
-                                return "dns_failed"
-                            elif opt.code == 22:
-                                logging.warning("No Reachable Authoritative Nameserver.")
-                                return "dns_failed"
-                            elif opt.code == 23:
-                                logging.warning("Network Error.")
-                                return "dns_failed"
-                            elif opt.code == 24:
-                                logging.warning("Invalid Data.")
-                                return "dns_failed"
-                            '''
+                            ede_errors.append(get_ede_description(opt.code))
+                            #ede_errors.append(opt.to_text())
+
                 if response.rcode() == dns.rcode.NXDOMAIN:
                     logging.warning(f'  --> No resource records exist for {tlsa_name}.')
                     return "no_tlsa", ede_errors
-                elif response.rcode() == dns.rcode.SERVFAIL:
-                    return "dnssec_failed", ede_errors
+                # Removing due to incorrectly blocking sites for DANE failure when some DNS servers return SERVFAIL for missing TLSA records.
+                #elif response.rcode() == dns.rcode.SERVFAIL:
+                #    return "dnssec_failed", ede_errors
                 elif response.rcode() == dns.rcode.FORMERR:
                     logging.error('  --> Query was malformed or otherwise uninterpretable by the DNS server.')
                     return "dns_failed", ede_errors
-                if response.rcode() == dns.rcode.NOTIMP:
+                elif response.rcode() == dns.rcode.NOTIMP:
                     logging.error('  --> DNS server does not support request type of DNS query.')
                     return "dns_failed", ede_errors
-                if response.rcode() == dns.rcode.REFUSED:
+                elif response.rcode() == dns.rcode.REFUSED:
                     logging.error('  --> DNS server refused the DNS query.')
                     return "dns_failed", ede_errors
         
@@ -395,19 +304,6 @@ class DANETLSAValidator:
                         self.dane_ta_matching_type = TLSA_Enum.MatchingType(matching_type).name
                         self.dane_ta_data = computed
                     break
-
-            '''
-            if match:
-                logging.info(f"TLSA match:")
-                logging.info(f"  - Certificate Usage:   {TLSA_Enum.Usage(usage).name} ({usage})") 
-                logging.info(f"  - Selector:            {TLSA_Enum.Selector(selector).name} ({selector})")
-                logging.info(f"  - Matching Type:       {TLSA_Enum.MatchingType(matching_type).name} ({matching_type})")
-                logging.info(f"  - Matched Data:        {computed.hex()}")
-                return match, None
-            else:
-                dane_error = ['Could not match TLSA record(s) against presented TLS certificate(s)']
-                return match, dane_error
-            '''
         
         elif usage == 1 or usage == 3:
             if selector == 0:  # Full certificate
@@ -429,7 +325,7 @@ class DANETLSAValidator:
                 logging.warning(f"Unknown matching type: {matching_type}")
                 return False, [f"Unknown matching type: {matching_type}"]
         
-            #logging.debug(f'Computed value from certificate to match against, based on TLSA selector and matching type: {computed.hex()}')
+            logging.debug(f'Computed value from certificate to match against, based on TLSA selector and matching type: {computed.hex()}')
             #logging.debug(f'Checking against TLSA record: {tlsa}')
 
             # Compare
@@ -440,7 +336,7 @@ class DANETLSAValidator:
             logging.info(f"  - Certificate Usage:          {TLSA_Enum.Usage(usage).name} ({usage})") 
             logging.info(f"  - Selector:                   {TLSA_Enum.Selector(selector).name} ({selector})")
             logging.info(f"  - Matching Type:              {TLSA_Enum.MatchingType(matching_type).name} ({matching_type})")
-            logging.info(f"  - Matched Data:               {computed.hex()}")
+            logging.info(f"  - Match Data (Computed):      {computed.hex()}")
             return match, None
         else:
             dane_error = ['Could not match TLSA record(s) against presented TLS certificate(s)']

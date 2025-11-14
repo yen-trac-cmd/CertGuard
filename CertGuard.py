@@ -1,8 +1,8 @@
 from ca_org_mapping import ca_org_to_caa
-from CertGuardConfig import Config, ErrorLevel
+from CertGuardConfig import Config, ErrorLevel, Logger
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519, ed448, dsa, padding
 from cryptography.x509 import ObjectIdentifier, UnrecognizedExtension
 #from cryptography.x509.oid import ExtensionOID, NameOID, ExtendedKeyUsageOID
@@ -12,9 +12,10 @@ from datetime import datetime, timedelta, timezone
 from dns.rdtypes.ANY import CAA
 from dns.resolver import dns
 from error_screen import error_screen
-from helper_functions import calculate_ski, get_cert_domains, supported_ciphers_list, deduplicate_chain
+from helper_functions import calculate_spki_hash, get_cert_domains, supported_ciphers_list, deduplicate_chain
 from logging.handlers import RotatingFileHandler
 from mitmproxy import ctx, http, addonmanager
+import helper_functions
 from tls_extensions import OCSPStaplingConfig
 from typing import Sequence, Optional, Tuple
 from urllib.parse import urlparse
@@ -32,7 +33,7 @@ BYPASS_PARAM = "CertGuard-Token"
 
 def load(loader: addonmanager.Loader) -> None:
     """
-    Sets mitmproxy logging level, TLS parameters, and creates CertGuard database if not present.
+    Sets mitmproxy console logging level, TLS parameters, and creates CertGuard database if not present.
     """
     if CONFIG.logging_level in ["debug", "info", "warn", "error", "alert"]:
         opts = ctx.options.keys()
@@ -46,38 +47,6 @@ def load(loader: addonmanager.Loader) -> None:
             ctx.options.termlog_verbosity = CONFIG.logging_level
     else:
         logging.warning(f"Invalid console logging mode defined in config.toml; defaulting to 'info' level.")
-    
-
-    #######################################################################TESTING#################################################
-    LOG_FILE = "logfile.log"
-    LOG_FORMAT = '%(asctime)s.%(msecs)03d %(name)s %(levelname)s %(message)s'
-    formatter = logging.Formatter(LOG_FORMAT)
-    formatter.datefmt = '%Y%m%d_%H:%M:%S'
-    
-    # Create a file handler (e.g., RotatingFileHandler for log rotation)
-    file_handler = RotatingFileHandler(LOG_FILE, maxBytes=1048576*5, backupCount=7)
-    file_handler.setFormatter(formatter)
-    file_handler.setLevel(logging.DEBUG) 
-        
-    logger = logging.getLogger('CertGuard')
-    if not any(isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", None) == file_handler.baseFilename for h in logger.handlers):
-        logger.addHandler(file_handler)
-    
-    logging.info(f"Logging to {LOG_FILE}.")
-    '''
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.DEBUG)
-    logfile = os.path.join(os.getcwd(), "logfile.log")
-    handler = logging.FileHandler(logfile)
-    formatter = logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s")
-    handler.setFormatter(formatter)
-    if not any(isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", None) == handler.baseFilename for h in logger.handlers):
-        logger.addHandler(handler)
-
-    #logging.basicConfig(level=logging.DEBUG, format='"%(asctime)s [%(name)s] %(levelname)s: %(message)s"', filename=logfile, filemode='a')
-    logger.info('GGGAAAAAAAAAAAAAAAAAAAAAAAAAA request made from module: %s', __name__)
-    '''
-    #######################################################################TESTING#################################################
 
     match CONFIG.min_tls_version:
         case 1.0:
@@ -221,11 +190,11 @@ def get_root_cert(server_chain: Sequence[x509.Certificate], root_store: Sequence
     logging.warning(f"-----------------------------------Entering get_root_cert()---------------------------------------")
     logging.info(f'Number of certifi + custom trusted root CA entries: {len(root_store)}')
 
-    for i, cert in enumerate(server_chain):
-        logging.debug(f'Cert #{i}: {cert.subject.rfc4514_string()}, Fingerprint: {cert.fingerprint(hashes.SHA256()).hex()}')
-
     # Remove duplicate certs to compensate for misconfigured servers
     server_chain = deduplicate_chain(server_chain)
+
+    #for i, cert in enumerate(server_chain):
+    #    logging.debug(f'Cert #{i}: {cert.subject.rfc4514_string()}, Fingerprint: {cert.fingerprint(hashes.SHA256()).hex()}')
 
     # Verify each link in the chain, starting from leaf and working up to the last interemediate CA cert
     for issuer, subject in zip(server_chain[1:], server_chain[:-1]):
@@ -259,8 +228,8 @@ def get_root_cert(server_chain: Sequence[x509.Certificate], root_store: Sequence
         try:
             ski_extension = cert.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value.digest.hex()
         except x509.ExtensionNotFound:
-            ski_extension = calculate_ski(cert)
-
+            ski_extension = calculate_spki_hash(cert, "SHA1")
+       
         fields = {
             "Subject": cert.subject.rfc4514_string(),
             "Issuer": cert.issuer.rfc4514_string(),
@@ -269,6 +238,7 @@ def get_root_cert(server_chain: Sequence[x509.Certificate], root_store: Sequence
             "Not valid before UTC": cert.not_valid_before_utc,
             "Not valid after UTC": cert.not_valid_after_utc,
             "Subject Key ID (SKI)": ski_extension,
+            "Subject PubKey (SHA256)": calculate_spki_hash(cert, "SHA256"),
             "Fingerprint (SHA1)": cert.fingerprint(hashes.SHA1()).hex(),
             "Fingerprint (SHA256)": cert.fingerprint(hashes.SHA256()).hex(),            
         }
@@ -287,22 +257,34 @@ def get_root_cert(server_chain: Sequence[x509.Certificate], root_store: Sequence
     for root in root_store:
         if root.subject == last_cert.issuer:
             try:
+                ski_extension = cert.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value.digest.hex()
+            except x509.ExtensionNotFound:
+                ski_extension = calculate_spki_hash(cert, "SHA1")
+            try:
                 verify_signature(last_cert, root)
                 logging.warning('Chain verified against Root CA:')
-                logging.info  (f'  Subject:              {root.subject.rfc4514_string()}')
-                logging.info  (f'  Issuer:               {root.issuer.rfc4514_string()}')
-                logging.info  (f'  Serial number:        {root.serial_number}')
-                logging.info  (f'  Serial number (hex):  {hex(root.serial_number)}')
-                logging.info  (f'  Not valid before UTC: {root.not_valid_before_utc}')
-                logging.info  (f'  Not valid after UTC:  {root.not_valid_after_utc}')
-                logging.info  (f'  Subject Key ID (SKI): {calculate_ski(root)}')
-                logging.info  (f'  Fingerprint (SHA1):   {(root.fingerprint(hashes.SHA1())).hex()}')
-                logging.info  (f'  Fingerprint (SHA256): {(root.fingerprint(hashes.SHA256())).hex()}')
+                logging.info  (f'  Subject:                 {root.subject.rfc4514_string()}')
+                logging.info  (f'  Issuer:                  {root.issuer.rfc4514_string()}')
+                logging.info  (f'  Serial number:           {root.serial_number}')
+                logging.info  (f'  Serial number (hex):     {hex(root.serial_number)}')
+                logging.info  (f'  Not valid before UTC:    {root.not_valid_before_utc}')
+                logging.info  (f'  Not valid after UTC:     {root.not_valid_after_utc}')
+                logging.info  (f'  Subject Key ID (SKI):    {ski_extension}')
+                logging.info  (f'  Subject PubKey (SHA256): {calculate_spki_hash(root, "SHA256")}'),
+                logging.info  (f'  Fingerprint (SHA1):      {(root.fingerprint(hashes.SHA1())).hex()}')
+                logging.info  (f'  Fingerprint (SHA256):    {(root.fingerprint(hashes.SHA256())).hex()}')
                 return root, None
             except Exception as e:
                 logging.error(f"Root CA cert verification failed: {e}")
                 continue
-    
+
+        try:
+            ski_extension = cert.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value.digest.hex()
+        except x509.ExtensionNotFound:
+            ski_extension = calculate_spki_hash(cert, "SHA1")
+
+
+
     logging.error(f"No trust anchor cert found!")
 
     try:
@@ -909,7 +891,9 @@ def check_caa_per_domain(domain: str, ca_identifiers: list[str]) -> tuple[bool, 
         
         # Check to see if comparing against an "effective TLD" / public suffix, with exceptions as defined in config.toml.
         # See https://developer.mozilla.org/en-US/docs/Glossary/eTLD and https://publicsuffix.org/ for reference
-        if check_domain in CONFIG.public_suffix_list and not check_domain in CONFIG.exempt_eTLDs: etld = True 
+        
+        #if check_domain in CONFIG.public_suffix_list and not check_domain in CONFIG.exempt_eTLDs: etld = True 
+        if check_domain in public_suffix_list and not check_domain in CONFIG.exempt_eTLDs: etld = True 
 
         try:
             current_resolver = CONFIG.resolvers[0]
@@ -1002,7 +986,7 @@ def check_caa_per_domain(domain: str, ca_identifiers: list[str]) -> tuple[bool, 
                             if ca in ca_entry:    # Note: Important to use 'in' since issue tags can have extension properties specified by Certification Authory.
                                 if etld:
                                     logging.error(f"Authorizing CAA record ({ca}) only found at .{check_domain} eTLD!")    
-                                    return True, f'&emsp;&nbsp;&nbsp;&nbsp;Matching CAA record (<code>{ca}</code>) <em>only</em> found at <b>.{check_domain}</b> eTLD!', records_found
+                                    return True, f'&emsp;&emsp;▶ Matching CAA record (<code>{ca}</code>) <em>only</em> found at <b>.{check_domain}</b> eTLD!', records_found
                                 logging.warning(f"SUCCESS: CA from mapping ({ca}) matched CAA record published at {check_domain}.")
                                 return True, None, records_found
 
@@ -1013,11 +997,11 @@ def check_caa_per_domain(domain: str, ca_identifiers: list[str]) -> tuple[bool, 
     # Exhausted CAA record search for DNS tree.  If CAA records found, but no matches for Issuing CA of leaf certificate, return warning.
     if is_wildcard and issuewild_properties:
         logging.error(f"Published 'issuewild' CAA records do not authorize Issuing CA of wildcard leaf cert!")
-        return False, f"&emsp;&nbsp;&nbsp;&nbsp;Wildcard CAA records do not authorize CA for wildcard site certificate.", records_found
+        return False, f"&emsp;&emsp;▶ Wildcard CAA records do not authorize CA for wildcard site certificate.", records_found
     
     if issue_properties:
         logging.error(f"Published 'issue' CAA records do not authorize Issuing CA for leaf cert!")
-        return False, f"&emsp;&nbsp;&nbsp;&nbsp;CAA records do not authorize CA for site certificate.", records_found
+        return False, f"&emsp;&emsp;▶ CAA records do not authorize CA for site certificate.", records_found
 
     # No CAA records found at all
     logging.warning(f'No published CAA record found; return true per RFC8659')
@@ -1028,7 +1012,7 @@ def test_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel,
     logging.warning("-----------------------------------Entering test_check()------------------------------------------")
     if "https://www.example.com/path" in flow.request.pretty_url:
         logging.info("Triggered test_check().")
-        violation = f'<span style="color: green;">&nbsp🛈</span>&nbsp&nbspExample URL accessed: <b>{flow.request.pretty_url}</b>.'
+        violation = f'<span style="color: green;">&nbsp;🛈</span>&nbsp;&nbsp;Example URL accessed: <b>{flow.request.pretty_url}</b>.'
         return ErrorLevel.INFO, violation
     return ErrorLevel.NONE, None
 
@@ -1038,7 +1022,7 @@ def dane_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel,
     
     if flow.server_conn.tls:
         logging.debug(f'Flow Connection:       {flow.server_conn}')
-        dane_validator.perform_dane_check(flow.server_conn)
+        dane_validator.perform_dane_check(root_store, flow.server_conn)
         
     logging.debug(f'dane_validator.dnssec_failure: {dane_validator.dnssec_failure}')
     logging.debug(f'dane_validator.dane_failure:   {dane_validator.dane_failure}')
@@ -1064,15 +1048,20 @@ pending_requests = {}
 
 # Load Certifi roots + any custom roots
 root_store = get_root_store()
+
+# Populate Public Suffix List
+public_suffix_list = helper_functions.load_public_suffix_list()
  
 # Load Certificate Transparency, optionally passing in legacy CT log file.
 if os.path.exists("./resources/legacy_log.json"):
     ct_log_map = verify_SCTs.load_ct_log_list(old_ct_log='./resources/legacy_log.json')
 else:
     ct_log_map = verify_SCTs.load_ct_log_list()
-
 if ct_log_map == None:
     logging.critical('Can not load Certificate Transparency log_list.json file!  Please check DNS resolution and Internet connectivity.')
+
+# Load file logger
+log = Logger.get_logger()
 
 def request(flow: http.HTTPFlow) -> None:
     highest_error_level = ErrorLevel.NONE.value
@@ -1233,10 +1222,32 @@ def request(flow: http.HTTPFlow) -> None:
             blockpage_color = error.color
         violations.append(violation)
 
+    from lxml.html import fromstring
+    import json
+    import re
+
+    def strip_html_lxml(html_string):
+        """Strips HTML tags using lxml and removes unicode characters."""
+        cz_to_replace = r"🛈|ℹ️|⛔|⚠️|&nbsp;|&emsp;|▶"
+        #translation_table = str.maketrans(chars_to_replace)
+        
+        error_text = re.sub(cz_to_replace, '', html_string).strip()
+        
+        tree = fromstring(error_text)
+        clean_error_text = tree.text_content()
+        
+        
+        return clean_error_text
+
     logging.info(f'-----------------------------------END verification for {host}--------------------------------------------')
     logging.warning(f"----> The highest_error_level value is: {highest_error_level}.")
     if highest_error_level > ErrorLevel.NONE.value:
         error_screen(flow, token, blockpage_color, violations, highest_error_level)
+        
+        logged_errors = [strip_html_lxml(v) for v in violations if v]
+        json_errors = json.dumps(logged_errors)
+        log.info(f'"Domain": "{flow.request.pretty_host}", "Level": {highest_error_level}, "Violations": {json_errors}')
+        
         record_decision(host, "blocked", root_hash)
         logging.error(f"Request to {host} blocked; Token={token}")
     else:
@@ -1247,4 +1258,17 @@ def request(flow: http.HTTPFlow) -> None:
             logging.info(f'Approved & cleared hosts after adding in final block: {approved_hosts}')
             return
 def done():
+    log_file = Logger.log_file
     dane_validator.done()
+    
+    try:
+        with open(log_file, 'r+b') as f:
+            f.seek(-2, os.SEEK_END)
+            f.truncate()
+            f.seek(0, os.SEEK_END)
+            f.write(b'\n],')
+            dane_stats = (f'\n"DANE TLSA Validator statistics": {{"Validated": {dane_validator.stats['validated']}, "Failed": {dane_validator.stats['dane_failed']}, "No TLSA": {dane_validator.stats['no_tlsa']}, "DNS Failed": {dane_validator.stats['dns_failed']}, "DNSSEC Failed": {dane_validator.stats['dnssec_failed']} }}')
+            f.write(dane_stats.encode('utf-8'))
+            f.write(b'\n}')
+    except Exception as e:
+        print(f'Error {e}')

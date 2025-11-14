@@ -13,7 +13,7 @@ from CertGuardConfig import Config
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization #, hashes
 from enum import IntEnum
-from helper_functions import get_ede_description
+from helper_functions import get_ede_description, verify_signature
 from mitmproxy import connection #tls, http, certs
 from typing import Sequence, Optional, Tuple
 
@@ -49,10 +49,9 @@ class DANETLSAValidator:
         self.cache = {}
         self.stats = {"validated": 0, "dane_failed": 0, "no_tlsa": 0, "dns_failed": 0, "dnssec_failed": 0}
 
-    def perform_dane_check(self, conn: connection.Server) -> None:
+    def perform_dane_check(self, root_store, conn: connection.Server) -> None:
         """Performs DANE validation logic against certificate chain"""
         logging.warning(f"Flow Connection ID:       {conn.id}")
-
         conn.address
         hostname = conn.address[0]
         port = conn.address[1]
@@ -66,7 +65,7 @@ class DANETLSAValidator:
 
         # Validate chain using DANE
         try:
-            result, validation_error = self.validate_dane(hostname, port, chain)
+            result, validation_error = self.validate_dane(root_store, hostname, port, chain)
         except Exception as e:
             logging.error(f"Error during DANE validation for {hostname}: {e}")
         
@@ -106,7 +105,7 @@ class DANETLSAValidator:
             logging.error('Unexpected condition; failing closed')
             self.violation = f"⛔ Unepxected error encountered during DANE checks.{f'<br>&emsp;&emsp;▶ ' + ", ".join(validation_error) if validation_error else ''}"
     
-    def validate_dane(self, hostname: str, port: int, chain: list[x509.Certificate]) -> str:
+    def validate_dane(self, root_store, hostname: str, port: int, chain: list[x509.Certificate]) -> str:
         """
         Validate certificate against TLSA records.
         Args:
@@ -131,8 +130,8 @@ class DANETLSAValidator:
         #logging.debug(f'Cache contains TLSA records for: {list(self.cache.keys())}')
         
         if cache_key in self.cache:
-            logging.debug('Found TLSA record in session cache; skipping DNS query.')
             tlsa_records = self.cache[cache_key]
+            logging.debug(f'Found TLSA record(s) in session cache: {tlsa_records}')
         else:
             # Query for TLSA records
             tlsa_name = f"_{port}._tcp.{hostname}"
@@ -218,20 +217,29 @@ class DANETLSAValidator:
             self.cache[cache_key] = tlsa_records  
             logging.debug(f'Added to TLSA record(s) to session cache under key {cache_key}.')
 
-        # Parse certificate
-        #x509_cert = x509.load_pem_x509_certificate(cert_pem)
-        x509_cert = chain[0]
+        # Fetch root
+        no_root = True
+        root = get_dane_root(chain, root_store)
+        if root[0]:
+            chain.append(root[0])
+            no_root = False
+        else:
+            logging.error(f'Could not locate root certificate for presented chain with Subject of: {root[1]}')
+
+        logging.warning(f'Length of chain (including root): {len(chain)}')
+        #logging.warning(f'Chain (including root): {chain}')
 
         # Validate against each TLSA record
+        x509_cert = chain[0]
         for tlsa in tlsa_records:
-            dane_validated, dane_error = self.check_tlsa_record(tlsa, chain, x509_cert)
+            dane_validated, dane_error = self.check_tlsa_record(tlsa, chain, x509_cert, no_root)
             if dane_validated:
                 return "dane_valid", None
         
         # If landed here, no TLSA records matched
         return "dane_failed", dane_error
 
-    def check_tlsa_record(self, tlsa: dns.rdata.Rdata, chain: list[x509.Certificate], cert: x509.Certificate) -> bool:
+    def check_tlsa_record(self, tlsa: dns.rdata.Rdata, chain: list[x509.Certificate], cert: x509.Certificate, no_root: bool) -> bool:
         """
         Check if certificate matches TLSA record.
         
@@ -248,7 +256,8 @@ class DANETLSAValidator:
         tlsa_cert_assoc_data = tlsa.cert
 
         # Get the data to match based on selector
-        # TODO: This logic Works if usage == 1 or usage == 3, but need more code to account for usage types 0 and 2.
+        # TODO: This logic works if usage == 1 or usage == 3, but haven't encountered DANE-asserted self-signed certs or certs that chain to a private
+        # PKI with usage types 0 or 2.
 
         if usage not in [0,1,2,3]:
             logging.error(f'Invalid DANE usage parameter: {usage}')
@@ -258,19 +267,9 @@ class DANETLSAValidator:
         self.dane_usage_type = usage
 
         if usage == 0 or usage == 2:
-            from CertGuard import root_store
-
-            if usage == 0:            
-                root = get_dane_root(chain, root_store)
-                if not root[0]:
-                    logging.error(f'Could not locate root certificate for presented chain with Subject of: {root[1]}')
-                    return False, [f"Could not locate root cert for chain: {root[1]}"]
-
-                chain.append(root[0])
-                logging.warning(f'Length of chain (including root): {len(chain)}')
-                #logging.warning(f'Chain (including root): {chain}')
-                #logging.debug([cert.subject for cert in chain])
-
+            if usage == 0 and no_root:  # MUST be able to chain up to root cert from local trust store for WebPKI Trust Anchor usage
+                return False, [f"Could not verify cert chain against trusted WebPKI root cert."]
+            
             if selector == 0:  # Full certificate
                 # Extract all certs in chain except for leaf cert (which would only be appropriate for Usage type 1 or 3)
                 data_list = [cert.public_bytes(encoding=serialization.Encoding.DER) for cert in chain[1:]]
@@ -351,9 +350,8 @@ class DANETLSAValidator:
         except Exception as e:
             logging.debug(f"DNSSEC check failed: {e}")
             return False
-    
 
-    def done(self):
+    def done(self) -> None:
         """Called when the add-on is unloaded."""
         print("DANE TLSA Validator statistics:")
         print(f"  Validated: {self.stats['validated']}")
@@ -361,7 +359,6 @@ class DANETLSAValidator:
         print(f"  No TLSA: {self.stats['no_tlsa']}")
         print(f"  DNS Failed: {self.stats['dns_failed']}")
         print(f"  DNSSEC Failed: {self.stats['dnssec_failed']}") 
-
 
 def get_dane_root(server_chain: Sequence[x509.Certificate], root_store: Sequence[x509.Certificate]) -> Tuple[Optional[x509.Certificate], Optional[str]]:
     """
@@ -375,13 +372,12 @@ def get_dane_root(server_chain: Sequence[x509.Certificate], root_store: Sequence
             root_cert: matched root cert from root_store, or None if no match.
             identifier: CN (preferred) or full RFC 4514 subject string of the matched root cert, or None if no root identified.
     """
-    from CertGuard import verify_signature
-            
+           
     # If using self-signed cert...
     if len(server_chain) == 1:
         self_signed = server_chain[0].issuer.rfc4514_string()
         logging.error(f'Self-signed certificate; Subject = {self_signed}')
-        return None, self_signed
+        return (None, self_signed)
 
     logging.info(f'Length of presented chain:       {len(server_chain)}')
 	
@@ -392,13 +388,13 @@ def get_dane_root(server_chain: Sequence[x509.Certificate], root_store: Sequence
             try:
                 verify_signature(last_cert, root)
                 logging.warning(f'Chain verified against Root CA: {root.subject.rfc4514_string()}')
-                return root, None
+                return (root, None)
             except Exception as e:
                 logging.error(f"Root CA cert verification failed: {e}")
                 continue
    
     logging.error(f"No stored trust anchor cert found")
     try:
-        return None, last_cert.issuer.get_attributes_for_oid(x509.NameOID.COMMON_NAME)[0].value
+        return (None, last_cert.issuer.get_attributes_for_oid(x509.NameOID.COMMON_NAME)[0].value)
     except:
-        return None, last_cert.issuer.rfc4514_string()
+        return (None, last_cert.issuer.rfc4514_string())

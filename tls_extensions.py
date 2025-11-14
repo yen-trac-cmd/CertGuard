@@ -1,6 +1,6 @@
 import logging
 from CertGuardConfig import Config
-from mitmproxy import tls, ctx
+from mitmproxy import tls
 from mitmproxy.addons.tlsconfig import TlsConfig
 from OpenSSL import SSL
 from cryptography.x509 import ocsp, UnrecognizedExtension

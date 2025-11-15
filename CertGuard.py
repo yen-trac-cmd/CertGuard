@@ -2,7 +2,7 @@ from ca_org_mapping import ca_org_to_caa
 from CertGuardConfig import Config, ErrorLevel, Logger
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519, ed448, dsa, padding
 from cryptography.x509 import ObjectIdentifier, UnrecognizedExtension
 #from cryptography.x509.oid import ExtensionOID, NameOID, ExtendedKeyUsageOID
@@ -12,14 +12,14 @@ from datetime import datetime, timedelta, timezone
 from dns.rdtypes.ANY import CAA
 from dns.resolver import dns
 from error_screen import error_screen
-from helper_functions import calculate_spki_hash, get_cert_domains, supported_ciphers_list, deduplicate_chain
-from logging.handlers import RotatingFileHandler
+from helper_functions import calculate_spki_hash, get_cert_domains, supported_ciphers_list, deduplicate_chain, clean_error
 from mitmproxy import ctx, http, addonmanager
 import helper_functions
 from tls_extensions import OCSPStaplingConfig
 from typing import Sequence, Optional, Tuple
 from urllib.parse import urlparse
 import certifi
+import json
 import logging
 import os
 import revocation_logic
@@ -190,11 +190,8 @@ def get_root_cert(server_chain: Sequence[x509.Certificate], root_store: Sequence
     logging.warning(f"-----------------------------------Entering get_root_cert()---------------------------------------")
     logging.info(f'Number of certifi + custom trusted root CA entries: {len(root_store)}')
 
-    # Remove duplicate certs to compensate for misconfigured servers
-    server_chain = deduplicate_chain(server_chain)
-
-    #for i, cert in enumerate(server_chain):
-    #    logging.debug(f'Cert #{i}: {cert.subject.rfc4514_string()}, Fingerprint: {cert.fingerprint(hashes.SHA256()).hex()}')
+    for i, cert in enumerate(server_chain):
+        logging.debug(f'Cert #{i}: {cert.subject.rfc4514_string()}, Fingerprint: {cert.fingerprint(hashes.SHA256()).hex()}')
 
     # Verify each link in the chain, starting from leaf and working up to the last interemediate CA cert
     for issuer, subject in zip(server_chain[1:], server_chain[:-1]):
@@ -666,8 +663,12 @@ def record_decision(host, decision, root_fingerprint) -> None:
 
 def sct_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, Optional[str]]:
     logging.warning("-----------------------------------Entering sct_check()-------------------------------------------")
-    cert   = flow.server_conn.certificate_list[0].to_cryptography()
-    issuer_cert = flow.server_conn.certificate_list[1].to_cryptography()
+    cert_chain = deduplicate_chain([cert.to_cryptography() for cert in flow.server_conn.certificate_list])
+    #cert = flow.server_conn.certificate_list[0].to_cryptography()
+    #issuer_cert = flow.server_conn.certificate_list[1].to_cryptography()
+    cert = cert_chain[0]
+    issuer_cert = cert_chain[1]
+
     warnings = []
     violations = []
     logging.info(f'Input cert: {cert.subject.rfc4514_string()}')
@@ -689,7 +690,7 @@ def sct_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, 
             logging.debug(f"  {k}: {v}")
         if sct["extension_bytes"] != '':
             logging.warning('  SCT extensions found')
-            sct_extension = bytes.fromhex(sct["extension_bytes"])
+            logging.debug(bytes.fromhex(sct["extension_bytes"]))
         
         # Validate SCT digital signatures (if enabled)
         if CONFIG.verify_signatures:
@@ -712,7 +713,7 @@ def sct_check(flow: http.HTTPFlow, root: x509.Certificate) -> Tuple[ErrorLevel, 
                 warnings.append(f'⚠️ {error}')
 
     if violations:
-        return ErrorLevel.FATAL, f'{"<br>".join(violations, warnings)}' 
+        return ErrorLevel.FATAL, f'{"<br>".join(violations)}' 
     
     if warnings:
         return ErrorLevel.ERROR, f'{"<br>".join(warnings)}'
@@ -1121,8 +1122,8 @@ def request(flow: http.HTTPFlow) -> None:
     if flow.request.pretty_host != flow.request.host:
         logging.error(f"Mismatch between mitmproxy host ({flow.request.host}) and HTTP 'Host' header ({flow.request.pretty_host}).")
 
-    # Convert chain certs to cryptography.x509.Certificate objects
-    cert_chain = [cert.to_cryptography() for cert in cert_chain]
+    # Convert certificate chain to cryptography.x509.Certificate objects & remove duplicate certs to compensate for misconfigured servers
+    cert_chain = deduplicate_chain([cert.to_cryptography() for cert in cert_chain])
     
     # Retrieve validated root cert as cryptography.hazmat.bindings._rust.x509.Certificate object.
     root_cert, claimed_root = get_root_cert(cert_chain, root_store)
@@ -1201,17 +1202,17 @@ def request(flow: http.HTTPFlow) -> None:
 
     my_checks = [
         dane_check,
-        root_country_check, 
-        controlled_CA_checks, 
+        #root_country_check, 
+        #controlled_CA_checks, 
         expiry_check, 
         revocation_checks, 
-        identity_check, 
+        #identity_check, 
         critical_ext_check,
         prior_approval_check, 
         sct_check, 
-        ct_quick_check,
+        #ct_quick_check,
         verify_cert_caa,
-        test_check,
+        #test_check,
     ] 
 
     violations=[]
@@ -1222,29 +1223,12 @@ def request(flow: http.HTTPFlow) -> None:
             blockpage_color = error.color
         violations.append(violation)
 
-    from lxml.html import fromstring
-    import json
-    import re
-
-    def strip_html_lxml(html_string):
-        """Strips HTML tags using lxml and removes unicode characters."""
-        cz_to_replace = r"🛈|ℹ️|⛔|⚠️|&nbsp;|&emsp;|▶"
-        #translation_table = str.maketrans(chars_to_replace)
-        
-        error_text = re.sub(cz_to_replace, '', html_string).strip()
-        
-        tree = fromstring(error_text)
-        clean_error_text = tree.text_content()
-        
-        
-        return clean_error_text
-
     logging.info(f'-----------------------------------END verification for {host}--------------------------------------------')
     logging.warning(f"----> The highest_error_level value is: {highest_error_level}.")
     if highest_error_level > ErrorLevel.NONE.value:
         error_screen(flow, token, blockpage_color, violations, highest_error_level)
         
-        logged_errors = [strip_html_lxml(v) for v in violations if v]
+        logged_errors = [clean_error(v) for v in violations if v]
         json_errors = json.dumps(logged_errors)
         log.info(f'"Domain": "{flow.request.pretty_host}", "Level": {highest_error_level}, "Violations": {json_errors}')
         
@@ -1267,7 +1251,7 @@ def done():
             f.truncate()
             f.seek(0, os.SEEK_END)
             f.write(b'\n],')
-            dane_stats = (f'\n"DANE TLSA Validator statistics": {{"Validated": {dane_validator.stats['validated']}, "Failed": {dane_validator.stats['dane_failed']}, "No TLSA": {dane_validator.stats['no_tlsa']}, "DNS Failed": {dane_validator.stats['dns_failed']}, "DNSSEC Failed": {dane_validator.stats['dnssec_failed']} }}')
+            dane_stats = (f'\n"DANE TLSA Validator statistics": {{"Validated": {dane_validator.stats['validated']}, "Failed": {dane_validator.stats['dane_failed']}, "No TLSA": {dane_validator.stats['no_tlsa']}, "DNS Failed": {dane_validator.stats['dns_failed']}, "DNSSEC Failed": {dane_validator.stats['dnssec_failed']}}}')
             f.write(dane_stats.encode('utf-8'))
             f.write(b'\n}')
     except Exception as e:

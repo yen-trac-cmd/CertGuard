@@ -48,18 +48,19 @@ filtering_mode = "allow"
 #country_list = ['AR','AU','BH','BR','CO','EG','IL','JP','JO','KE','KW','MA','NZ','PK','PH','QA','KR','TH','TN']  # MNNA Countries as defined in 22USC §2321k and 10USC §2350a - https://www.state.gov/major-non-nato-ally-status
 #country_list = ['AM','AZ','BY','KG','KZ','MD','RU','TJ','UZ']  # CIS Full Members (Moldova and Ukraine do not qualify) - https://eccis.org/map
 #country_list = ['CN','CU','HK','IR','KP','MO','RU','VE']  # US Foreign Adversaries as defined in 15 CFR § 791.4 - https://www.ecfr.gov/current/title-15/subtitle-B/chapter-VII/subchapter-E/part-791/subpart-A/section-791.4
-country_list = ['BE','GB','US']
+#country_list = ['BE','GB','US']
+country_list = []
 
 # Specify iso-3166-alpha2 codes for countries that will raise a level-6 / fatal error that cannot by bypassed by users, irrespective of country filtering mode.
-blocklist = ['CN','IR','KP','RU']
-
+#blocklist = ['CN','IR','KP','RU']
+blocklist = []
 
 [controlled_roots]
 # List the X.509v3 Common Name (CN) and/or Organization (O) value(s) for any root CA certs that you wish to warn or prohibit access to.  
 # Restricted roots will raise a Level-5 browser warning that users can click through.
 # Prohibited roots will raise a Level-6 error that cannot be bypassed.
-#restricted_roots = []
-restricted_roots = ['VeriSign, Inc.'] #, 'DigiCert Global Root G2']   # For testing purposes 
+restricted_roots = []
+#restricted_roots = ['VeriSign, Inc.'] # For testing purposes 
 prohibited_roots = ['Fina Root CA', 'Financijska agencija']
 
 

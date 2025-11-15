@@ -5,9 +5,6 @@ from mitmproxy.addons.tlsconfig import TlsConfig
 from OpenSSL import SSL
 from cryptography.x509 import ocsp, UnrecognizedExtension
 from revocation_logic import validate_ocsp_signature
-#from cryptography.hazmat.primitives import serialization
-#from cryptography.hazmat.primitives.asymmetric import ec, ed25519, ed448, padding, rsa
-#from cryptography import x509
 
 CONFIG = Config()
 
@@ -47,7 +44,7 @@ class OCSPStaplingConfig(TlsConfig):
         try:
             # Get the existing SSL context
             ssl_ctx = tls_start.ssl_conn.get_context()
-            
+
             # Create callback to receive OCSP response
             def ocsp_callback(conn, ocsp_data, user_data) -> bool:
                 """Callback to receive OCSP response from server"""
@@ -79,15 +76,9 @@ class OCSPStaplingConfig(TlsConfig):
             
            # Set the OCSP callback
             ssl_ctx.set_ocsp_client_callback(ocsp_callback)
-            
-            # Rebuild the SSL.Connection with the modified context
-            tls_start.ssl_conn = SSL.Connection(ssl_ctx)
-            if tls_start.conn.sni:
-                tls_start.ssl_conn.set_tlsext_host_name(tls_start.conn.sni.encode())
-            
+
             # Request OCSP stapling
             tls_start.ssl_conn.request_ocsp()
-            tls_start.ssl_conn.set_connect_state()
             logging.info(f"[OCSP] Requesting OCSP stapling for {sni}")
             
         except Exception as e:

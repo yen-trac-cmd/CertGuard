@@ -217,3 +217,16 @@ def verify_signature(subject: x509.Certificate, issuer: x509.Certificate) -> Non
 
     else:
         raise TypeError(f"Unsupported public key type: {type(pub)}")
+
+def clean_error(html_string):
+    """Strips HTML tags using lxml and removes unicode characters to produce text-only error."""
+    from lxml.html import fromstring
+    import re
+
+    cz_to_replace = r"🛈|ℹ️|⛔|⚠️|&nbsp;|&emsp;|▶"
+    
+    error_text = re.sub(cz_to_replace, '', html_string).strip()
+    tree = fromstring(error_text)
+    clean_error_text = tree.text_content()
+    
+    return clean_error_text

@@ -1,3 +1,4 @@
+from CertGuardConfig import ErrorLevel, BYPASS_PARAM
 from mitmproxy import http
 from urllib.parse import urlencode, urlparse, parse_qs, urlunparse
 
@@ -17,21 +18,20 @@ def append_query_param(url, key, value):
     new_query = urlencode(query, doseq=True)
     return urlunparse(parsed._replace(query=new_query))
 
-def error_screen(flow, token, color, violations, error_level):
-    from CertGuard import ErrorLevel, BYPASS_PARAM, CONFIG
 
+def error_screen(config, flow, token, color, violations, error_level):
     scheme = color_schemes.get(color, {"bg": "#f0f0f0", "errorlevel_color": "#666"})
     bg, errorlevel_color = scheme["bg"], scheme["errorlevel_color"]
 
     if error_level < ErrorLevel.FATAL.value:
-        if CONFIG.token_mode == 'get':
+        if config.token_mode == 'get':
             bypass_url = append_query_param(flow.request.pretty_url, BYPASS_PARAM, token)
             prompt= f"""
                 <p>Are you sure you want to proceed?</p>
                 <a href="{bypass_url}" class="btn">Proceed Anyway</a>
                 """
         
-        elif CONFIG.token_mode == 'post':
+        elif config.token_mode == 'post':
             prompt = f"""
                 <p>Are you sure you want to proceed?</p>
                 <form method="POST" action="{flow.request.pretty_url}">
@@ -40,7 +40,7 @@ def error_screen(flow, token, color, violations, error_level):
                 </form>
             """
         
-        elif CONFIG.token_mode == 'header':
+        elif config.token_mode == 'header':
             prompt = f"""
                 <p>Are you sure you want to proceed?</p>
                 <button id="approve-btn">Proceed Anyway</button>
@@ -83,7 +83,7 @@ def error_screen(flow, token, color, violations, error_level):
             a.std        {{}}
             a.btn        {{ display:inline-block; padding:10px 15px; background:{errorlevel_color}; color:white; text-decoration:none; border-radius:4px; cursor:pointer; }}              
           </style>
-          {javascript if CONFIG.token_mode == 'header' and error_level < ErrorLevel.FATAL.value else ""}
+          {javascript if config.token_mode == 'header' and error_level < ErrorLevel.FATAL.value else ""}
           </head>
           <body>
             <div class="warning-box">

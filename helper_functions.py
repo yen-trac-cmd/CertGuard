@@ -2,9 +2,10 @@ import hashlib
 import logging
 import sys
 from cryptography import x509
-from cryptography.hazmat.backends import default_backend
+from cryptography.x509.oid import ExtensionOID
+#from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization, hashes
-from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519, ed448, dsa, padding
+#from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519, ed448, dsa, padding
 from enum import Enum
 from mitmproxy import certs
 from requests_cache import CachedSession, timedelta
@@ -80,13 +81,14 @@ def get_cert_domains(x509_cert: certs.Cert) -> list[str]:
 
     return list(domains)
 
-def calculate_spki_hash(cert: x509.Certificate, hash_type: str) -> str:
+def calculate_spki_hash(cert: x509.Certificate, hash_type: str, hex: bool = False) -> str:
     """
     Calculates a hash against the provided certificate's Subject Public Key Information (SPKI) data.
     
     Args:
         cert:           An x509.Certificate object from the cryptography library.
-        hash_type:      String value representing type of hash to return
+        hash_type:      String value representing type of hash to return.
+        hex:            Boolean to indicate if the returned value should be in hexadicmal form.
         
     Returns:
         spki_hash:      The caclulated SPKI hash as a hexadecimal string.
@@ -104,13 +106,40 @@ def calculate_spki_hash(cert: x509.Certificate, hash_type: str) -> str:
         logging.error(f'Unexpected exception serializing certificate public key: {e}')
     
     if hash_type == "SHA1":
-        spki_hash = hashlib.sha1(spki_der).digest().hex()
+        spki_hash = hashlib.sha1(spki_der).digest()
     if hash_type == "SHA256":
-        spki_hash = hashlib.sha256(spki_der).digest().hex()
+        spki_hash = hashlib.sha256(spki_der).digest()
     elif hash_type == "SHA512":
-        spki_hash = hashlib.sha512(spki_der).digest().hex()
+        spki_hash = hashlib.sha512(spki_der).digest()
     
+    if hex == True:
+        return spki_hash.hex()
+
     return spki_hash
+
+def get_extension_value(cert, oid, attr=None):
+    """Safely extract extension value, optionally accessing a nested attribute."""
+    try:
+        ext = cert.extensions.get_extension_for_oid(oid).value
+        return getattr(ext, attr) if attr else ext
+    except Exception:
+        return None
+
+def get_spkid(cert):
+    """Extract Subject Public Key Identifier."""
+    try:
+        ski_extension = get_extension_value(cert, ExtensionOID.SUBJECT_KEY_IDENTIFIER, 'digest')
+    except x509.ExtensionNotFound:
+        ski_extension = calculate_spki_hash(cert, "SHA1")
+
+    if not ski_extension:
+        ski_extension = calculate_spki_hash(cert, "SHA1")
+
+    return ski_extension
+
+def get_akid(cert):
+    """Extract Authority Key Identifier."""
+    return get_extension_value(cert, ExtensionOID.AUTHORITY_KEY_IDENTIFIER, 'key_identifier')
 
 def get_ede_description(code: int) -> str:
     """Returns a descriptive string for Extended DNS Error (EDE) codes defined in RFC 8914 and IANA assignments.
@@ -150,75 +179,7 @@ def get_ede_description(code: int) -> str:
     }
     return EDE_CODES_MAP.get(code, "Unknown EDE Code")
 
-def deduplicate_chain(cert_chain: Sequence[x509.Certificate]) -> Sequence[x509.Certificate]:
-    """ Removes duplicate certs from provided certificate chain """
-    seen = set()
-    unique_chain = []
-    for cert in cert_chain:
-        fingerprint = cert.fingerprint(hashes.SHA256())
-        if fingerprint not in seen:
-            seen.add(fingerprint)
-            unique_chain.append(cert)
-        else:
-            logging.warning(f"Duplicate certificate detected: {cert.subject.rfc4514_string()}")
-    return unique_chain
-
-def verify_signature(subject: x509.Certificate, issuer: x509.Certificate) -> None:
-    """
-    Cryptographically verify that `issuer` signed `subject`.
-        Handles RSA (PKCS#1 v1.5 and basic PSS), ECDSA, Ed25519/Ed448, and DSA.
-    
-    Args:
-        subject:    x509.Certificate object signed by issuer
-        issuer:     x509.Certificate object from which signature on subject will be verified
-    
-    Returns:
-        None:       An exception is raised if digital signature verification fails, otherwise verification was successful.
-    """
-    # For debugging purposes only
-    #from cryptography.hazmat.primitives import serialization
-    #logging.error(f'Subject PEM bytes: {(subject.public_bytes(serialization.Encoding.PEM)).decode("utf-8")}')
-    #logging.info('-----------------------------------')
-    #logging.error(f'Issuer PEM bytes: {(issuer.public_bytes(serialization.Encoding.PEM)).decode("utf-8")}')
-        
-    pub = issuer.public_key()
-    oid = subject.signature_algorithm_oid
-    h = subject.signature_hash_algorithm  # a HashAlgorithm instance, or None for EdDSA
-
-    if isinstance(pub, rsa.RSAPublicKey):
-        # Handle RSA-PSS vs RSA-PKCS1v1.5
-        if oid == x509.SignatureAlgorithmOID.RSASSA_PSS:
-            # Best-effort PSS parameters: MGF1 with same hash; salt len = hash length.
-            # (Parsing explicit PSS params is possible but longer; this covers common cases.)
-            pub.verify(
-                signature=subject.signature,
-                data=subject.tbs_certificate_bytes,
-                padding=padding.PSS(mgf=padding.MGF1(h), salt_length=h.digest_size),
-                algorithm=h,
-            )
-        else:
-            #try:
-            pub.verify(signature=subject.signature, data=subject.tbs_certificate_bytes, padding=padding.PKCS1v15(), algorithm=h)
-            #except Exception as e:
-            #    logging.critical(f'Error: {e}')
-
-    elif isinstance(pub, ec.EllipticCurvePublicKey):
-        # ECDSA takes a signature algorithm wrapper with the hash
-        pub.verify(signature=subject.signature, data=subject.tbs_certificate_bytes, signature_algorithm=ec.ECDSA(h))
-
-    elif isinstance(pub, ed25519.Ed25519PublicKey):
-        pub.verify(subject.signature, subject.tbs_certificate_bytes)
-
-    elif isinstance(pub, ed448.Ed448PublicKey):
-        pub.verify(subject.signature, subject.tbs_certificate_bytes)
-
-    elif isinstance(pub, dsa.DSAPublicKey):
-        pub.verify(signature=subject.signature, data=subject.tbs_certificate_bytes, algorithm=h,)
-
-    else:
-        raise TypeError(f"Unsupported public key type: {type(pub)}")
-
-def clean_error(html_string):
+def clean_error(html_string: str) -> str:
     """Strips HTML tags using lxml and removes unicode characters to produce text-only error."""
     from lxml.html import fromstring
     import re

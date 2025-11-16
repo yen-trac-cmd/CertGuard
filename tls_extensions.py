@@ -1,9 +1,12 @@
 import logging
+
+import OpenSSL
 from CertGuardConfig import Config
 from mitmproxy import tls
 from mitmproxy.addons.tlsconfig import TlsConfig
 from OpenSSL import SSL
-from cryptography.x509 import ocsp, UnrecognizedExtension
+from cryptography.x509 import ocsp, UnrecognizedExtension, Certificate
+from chain_builder import deduplicate_chain
 from revocation_logic import validate_ocsp_signature
 
 CONFIG = Config()
@@ -46,7 +49,7 @@ class OCSPStaplingConfig(TlsConfig):
             ssl_ctx = tls_start.ssl_conn.get_context()
 
             # Create callback to receive OCSP response
-            def ocsp_callback(conn, ocsp_data, user_data) -> bool:
+            def ocsp_callback(conn: OpenSSL.SSL.Connection, ocsp_data, user_data) -> bool:
                 """Callback to receive OCSP response from server"""
                 try:
                     if ocsp_data:
@@ -64,8 +67,9 @@ class OCSPStaplingConfig(TlsConfig):
                         # Parse and validate the OCSP response
                         try:
                             # Get the server's certificate chain for validation
-                            cert_chain = conn.get_peer_cert_chain()
-                            self.parse_and_validate_ocsp_response(ocsp_data, callback_sni, cert_chain, conn_id)
+                            cert_chain = conn.get_peer_cert_chain(as_cryptography=True)  #########################################################################
+                            cert_chain = deduplicate_chain(cert_chain)
+                            self.parse_and_validate_ocsp_response(ocsp_data, cert_chain, conn_id)
                         except Exception as e:
                             logging.error(f"[OCSP] Failed to parse/validate OCSP response: {e}")
                     
@@ -94,7 +98,7 @@ class OCSPStaplingConfig(TlsConfig):
             self.failed_domains.add(sni)
             logging.warning(f"[OCSP] TLS handshake failed for {sni}, disabling OCSP for this domain")
     
-    def parse_and_validate_ocsp_response(self, ocsp_data: bytes, sni: str, cert_chain, conn_id) -> None:
+    def parse_and_validate_ocsp_response(self, ocsp_data: bytes, cert_chain: list[Certificate], conn_id) -> None:
         """Parse, validate signature, and display OCSP response details"""
         try:
             # Parse OCSP response using cryptography library

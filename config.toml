@@ -37,7 +37,7 @@ token_mode = "get"
 [country_filtering]
 # Set mode to "allow" to bypass certificate country checks for the countries specified in 'country_list'; all other countries will generate a warning.
 # Set mode to "warn" to generate warnings for countries specified in 'country_list'; certificate country checks for all other countries will be bypassed.
-filtering_mode = "allow"
+filtering_mode = "warn"
 
 # Define list of allowed or denied countries, using iso-3166-alpha2 codes.
 # Countries will be compared against "C=" value extracted from certificate Subject fields.

@@ -13,7 +13,8 @@ from CertGuardConfig import Config
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization #, hashes
 from enum import IntEnum
-from helper_functions import get_ede_description, verify_signature
+from helper_functions import get_ede_description
+from chain_builder import verify_signature
 from mitmproxy import connection #tls, http, certs
 from typing import Sequence, Optional, Tuple
 
@@ -186,9 +187,8 @@ class DANETLSAValidator:
                 if response.rcode() == dns.rcode.NXDOMAIN:
                     logging.warning(f'  --> No resource records exist for {tlsa_name}.')
                     return "no_tlsa", ede_errors
-                # Removing due to incorrectly blocking sites for DANE failure when some DNS servers return SERVFAIL for missing TLSA records.
-                #elif response.rcode() == dns.rcode.SERVFAIL:
-                #    return "dnssec_failed", ede_errors
+                elif response.rcode() == dns.rcode.SERVFAIL and ede_errors:
+                    return "dnssec_failed", ede_errors
                 elif response.rcode() == dns.rcode.FORMERR:
                     logging.error('  --> Query was malformed or otherwise uninterpretable by the DNS server.')
                     return "dns_failed", ede_errors

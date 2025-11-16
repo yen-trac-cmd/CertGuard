@@ -8,6 +8,8 @@ from collections import deque
 from enum import Enum
 from logging.handlers import RotatingFileHandler
 
+BYPASS_PARAM = "CertGuard-Token"
+
 class ErrorLevel(Enum):
     NONE   = 0
     INFO   = 1

@@ -407,30 +407,16 @@ def _check_crl(cert: x509.Certificate, crl_urls: list, issuer_cert: x509.Certifi
     logging.debug('Catch-all return; returning None, None.')
     return (None, None)
 
-def validate_ocsp_signature(ocsp_resp: ocsp.OCSPResponse, cert_chain, issuer_cert: x509.Certificate = None) -> bool:
+def validate_ocsp_signature(ocsp_resp: ocsp.OCSPResponse, cert_chain: list[x509.Certificate], issuer_cert: x509.Certificate = None) -> bool:
         """Validate the OCSP response signature against the certificate chain"""
         if issuer_cert:
             pass
         else:
-            # Convert PyOpenSSL certificate chain to cryptography certificates 
             # Only applicable for stapled OCSP check called from tls_extensions module
             issuer_cert = None
             if cert_chain and len(cert_chain) > 1:
-                issuer_openssl = cert_chain[1]
-                # Convert to x509.Certificate object
-                try:
-                    issuer_cert = issuer_openssl.to_cryptography()
-                except AttributeError:
-                    # Fallback: export as PEM and re-import
-                    try:
-                        issuer_pem = issuer_openssl.public_bytes(serialization.Encoding.PEM)
-                        issuer_cert = x509.load_pem_x509_certificate(issuer_pem)
-                    except Exception as e:
-                        logging.warning(f"Could not convert issuer certificate: {e}")
-                        return False
-                except Exception as e:
-                    logging.error(f'Unexpected exception encountered: {e}')
-        
+                issuer_cert = cert_chain[1]
+
         logging.debug(f'Issuer cert subject: {issuer_cert.subject.rfc4514_string()}')
         logging.debug(f'Issuer cert digest:  {issuer_cert.fingerprint(hashes.SHA256()).hex()}')
 

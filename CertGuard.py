@@ -601,14 +601,17 @@ def verify_cert_caa(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> 
     logging.warning("-----------------------------------Entering verify_cert_caa()-------------------------------------")
 
     x509_leaf = cert_chain[0]
-    #leaf = flow.server_conn.certificate_list[0]
-    #x509_leaf = leaf.to_cryptography()
-    
+
     orgs=[]
     for attr in x509_leaf.issuer.get_attributes_for_oid(x509.oid.NameOID.ORGANIZATION_NAME):
         org = attr.value
         orgs.append(org)
         logging.info(f' Extracted Organization for Issuing CA Cert:  O="{org}"')
+    
+    if not orgs:
+        logging.error(f'No Organization (O=) value identified in leaf cert.  Bypassing curther CAA checks.')
+        return ErrorLevel.WARN, f'⚠️ No Organization (O=) value found in leaf cert subject.'
+
     if len(orgs) >= 2:
         logging.info(f' Multiple Orgs found in Issuing CA: {orgs}')
         return ErrorLevel.FATAL, f'⛔ Multiple Organization values encountered inside Issuing CA cert! <b>{",".join(orgs)}</b>' 
@@ -861,7 +864,7 @@ def record_decision(host, decision, root_fingerprint) -> None:
 
 dane_validator = DANETLSAValidator()      # Class for DANE validation logic
 ocsp_addon = OCSPStaplingConfig()         # Class to inject OCSP Stapling requests into TLS handshake to upstream servers
-addons = [ocsp_addon]
+#addons = [ocsp_addon]
 
 approved_hosts = set()
 pending_requests = {}
@@ -937,7 +940,7 @@ def request(flow: http.HTTPFlow) -> None:
     logging.info(f'====> Method:                    {flow.request.method}')
     logging.info(f'====> Referer:                   {referer_header}')
     logging.info(f'====> Accept:                    {accept_header}')
-    logging.debug(f'====> Leaf cert SubAltName(s):  {", ".join([name.value for name in cert_chain[0].altnames])}')
+    logging.debug(f'====> Leaf cert SubAltName(s):  {", ".join([name.value for name in cert_chain[0].altnames if type(name.value) == str])}')
 
     if flow.request.pretty_host != flow.request.host:
         logging.error(f"Mismatch between mitmproxy host ({flow.request.host}) and HTTP 'Host' header ({flow.request.pretty_host}).")

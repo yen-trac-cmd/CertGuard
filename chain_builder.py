@@ -40,8 +40,11 @@ def get_root_cert(
     if len(server_chain) == 1:
         # Return self-signed certificates as pseudo-root.
         #self_signed = server_chain[0].issuer.rfc4514_string()
-        self_signed = server_chain[0]
-        return None, None, None, self_signed
+        
+        # Confirm it's self-signed before returning...
+        if server_chain[0].subject == server_chain[0].issuer:
+            self_signed = server_chain[0]
+            return None, None, None, self_signed
 
     logging.info(f'Length of presented chain: {len(server_chain)}')
 

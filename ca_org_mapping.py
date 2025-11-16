@@ -9,6 +9,7 @@ D-Trust:        https://www.d-trust.net/en/support/repository
 DigiCert:       https://docs.digicert.com/en/certcentral/manage-certificates/dns-caa-resource-record-check.html
                 https://www.digicert.com/content/dam/digicert/pdfs/legal/digicert-public-trust-cpcps-7.06.pdf
 Entrust:        https://www.entrust.com/legal-compliance/entrust-certificate-services-repository
+Fastly:         https://www.certainly.com/repository/index.html
 Gehirn MCA:     https://www.gehirn.jp/mca/repository/
 GlobalSign:     https://www.globalsign.com/en/repository
 Google:         https://pki.goog/repository/
@@ -48,6 +49,7 @@ ca_org_to_caa  = {
   "BEIJING CERTIFICATE AUTHORITY": ["bjca.cn"],
   "Buypass AS-983163327": ["buypass.com"],
   "COMODO CA Limited": ["comodoca.com", "sectigo.com"],
+  "Certainly": ["certainly.com"],
   "Certigna": ["certigna.fr", "certigna.com"],
   "CERTSIGN SA": ["certsign.ro"],  
   "certSIGN": ["certsign.ro"],

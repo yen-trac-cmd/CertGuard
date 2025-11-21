@@ -2,8 +2,10 @@ import logging
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519, ed448, dsa, padding
-from helper_functions import calculate_spki_hash, get_spkid, get_akid
+from helper_functions import calculate_spki_hash, get_spkid, get_akid, is_self_signed
 from typing import Sequence, Optional, Tuple
+
+import helper_functions
 
 def get_root_cert(
         server_chain: Sequence[x509.Certificate], 
@@ -24,12 +26,6 @@ def get_root_cert(
     logging.warning(f"-----------------------------------Entering get_root_cert()---------------------------------------")
     logging.info(f'Number of certifi + custom trusted root CA entries: {len(root_store)}')
 
-    '''
-    logging.error(f'get_root_cert() type(chain): {type(server_chain)}')
-    for cert in server_chain:
-        logging.error(f'get_root_cert() type(cert): {type(cert)}')
-    '''
-    
     for i, cert in enumerate(server_chain):
         logging.debug(f'Cert #{i}: subject = {cert.subject.rfc4514_string()}')
         logging.debug(f'Cert #{i}: issuer  = {cert.issuer.rfc4514_string()}')
@@ -40,12 +36,15 @@ def get_root_cert(
     if len(server_chain) == 1:
         # Return self-signed certificates as pseudo-root.
         #self_signed = server_chain[0].issuer.rfc4514_string()
-        
-        # Confirm it's self-signed before returning...
-        if server_chain[0].subject == server_chain[0].issuer:
-            self_signed = server_chain[0]
-            return None, None, None, self_signed
-
+        cert = server_chain[0]
+        # Confirm it's properly self-signed before returning...
+        if helper_functions.is_self_signed(cert):
+            return None, None, None, cert
+        else:  # Signature verification failed
+            if cert.subject == cert.issuer:
+                verification_error = f"<br>&emsp;&emsp;▶ Invalid digital signature for self-signed certificate:<br>&emsp;&emsp;&emsp;<code>{cert.subject.rfc4514_string()}</code>"
+                return None, None, verification_error, None
+            
     logging.info(f'Length of presented chain: {len(server_chain)}')
 
     for i, cert in enumerate(server_chain):
@@ -57,7 +56,7 @@ def get_root_cert(
         elif i == 1:
             label = "Issuing CA"
         else:
-            label = f"Subordinate CA #{i-1}" if i > 2 else "Subordinate CA"
+            label = f"Intermediate CA #{i-1}" if i > 2 else "Subordinate CA"
        
         aki_extension = get_akid(cert)
         if aki_extension:
@@ -106,7 +105,8 @@ def get_root_cert(
     root_in_chain = False
     if last_cert.subject == last_cert.issuer:
         logging.debug('Note: Root cert included in cert chain from webserver.')
-        last_cert = server_chain[-2]
+        if len(server_chain) > 2:
+            last_cert = server_chain[-2]
         root_in_chain = True
 
     for root in root_store:
@@ -140,10 +140,10 @@ def get_root_cert(
                 continue
 
     logging.error(f"No trust anchor cert found!")
-    try:
-        return None, last_cert.issuer.get_attributes_for_oid(x509.NameOID.COMMON_NAME)[0].value, None, None
-    except:
-        return None, last_cert.issuer.rfc4514_string(), None, None
+    #try:
+        #return None, last_cert.issuer.get_attributes_for_oid(x509.NameOID.COMMON_NAME)[0].value, None, None
+    #except:
+    return None, last_cert.issuer.rfc4514_string(), None, None
 
 def verify_signature(subject: x509.Certificate, issuer: x509.Certificate) -> None:
     """
@@ -156,42 +156,39 @@ def verify_signature(subject: x509.Certificate, issuer: x509.Certificate) -> Non
     #logging.info('-----------------------------------')
     #logging.error(f'Issuer PEM bytes: {(issuer.public_bytes(serialization.Encoding.PEM)).decode("utf-8")}')
         
-    pub = issuer.public_key()
+    pubkey = issuer.public_key()
     oid = subject.signature_algorithm_oid
     h = subject.signature_hash_algorithm  # a HashAlgorithm instance, or None for EdDSA
 
-    if isinstance(pub, rsa.RSAPublicKey):
+    if isinstance(pubkey, rsa.RSAPublicKey):
         # Handle RSA-PSS vs RSA-PKCS1v1.5
         if oid == x509.SignatureAlgorithmOID.RSASSA_PSS:
             # Best-effort PSS parameters: MGF1 with same hash; salt len = hash length.
             # (Parsing explicit PSS params is possible but longer; this covers common cases.)
-            pub.verify(
+            pubkey.verify(
                 signature=subject.signature,
                 data=subject.tbs_certificate_bytes,
                 padding=padding.PSS(mgf=padding.MGF1(h), salt_length=h.digest_size),
                 algorithm=h,
             )
         else:
-            #try:
-            pub.verify(signature=subject.signature, data=subject.tbs_certificate_bytes, padding=padding.PKCS1v15(), algorithm=h)
-            #except Exception as e:
-            #    logging.critical(f'Error: {e}')
+            pubkey.verify(signature=subject.signature, data=subject.tbs_certificate_bytes, padding=padding.PKCS1v15(), algorithm=h)
 
-    elif isinstance(pub, ec.EllipticCurvePublicKey):
+    elif isinstance(pubkey, ec.EllipticCurvePublicKey):
         # ECDSA takes a signature algorithm wrapper with the hash
-        pub.verify(signature=subject.signature, data=subject.tbs_certificate_bytes, signature_algorithm=ec.ECDSA(h))
+        pubkey.verify(signature=subject.signature, data=subject.tbs_certificate_bytes, signature_algorithm=ec.ECDSA(h))
 
-    elif isinstance(pub, ed25519.Ed25519PublicKey):
-        pub.verify(subject.signature, subject.tbs_certificate_bytes)
+    elif isinstance(pubkey, ed25519.Ed25519PublicKey):
+        pubkey.verify(subject.signature, subject.tbs_certificate_bytes)
 
-    elif isinstance(pub, ed448.Ed448PublicKey):
-        pub.verify(subject.signature, subject.tbs_certificate_bytes)
+    elif isinstance(pubkey, ed448.Ed448PublicKey):
+        pubkey.verify(subject.signature, subject.tbs_certificate_bytes)
 
-    elif isinstance(pub, dsa.DSAPublicKey):
-        pub.verify(signature=subject.signature, data=subject.tbs_certificate_bytes, algorithm=h,)
+    elif isinstance(pubkey, dsa.DSAPublicKey):
+        pubkey.verify(signature=subject.signature, data=subject.tbs_certificate_bytes, algorithm=h,)
 
     else:
-        raise TypeError(f"Unsupported public key type: {type(pub)}")
+        raise TypeError(f"Unsupported public key type: {type(pubkey)}")
 
 def deduplicate_chain(cert_chain: Sequence[x509.Certificate]) -> Sequence[x509.Certificate]:
     """ Removes duplicate certs from provided certificate chain """
@@ -278,10 +275,7 @@ def normalize_chain(chain: list[x509.Certificate]) -> Sequence[x509.Certificate]
     '''
 
     if len(chain) == 1:
-        #self_signed = chain
-        #logging.error(f'Self-signed certificate; Subject = {self_signed[0].subject.rfc4514_string()}')
-        #return self_signed[0], None
-        logging.error(f'Encountered Self-signed certificate: {chain[0].subject.rfc4514_string()}')
+        logging.error(f'Encountered Unchained certificate: {chain[0].subject.rfc4514_string()}')
         return chain
 
     # Build lookup indexes

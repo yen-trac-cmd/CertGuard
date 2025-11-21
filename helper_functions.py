@@ -5,6 +5,7 @@ from cryptography import x509
 from cryptography.x509.oid import ExtensionOID
 #from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization, hashes
+from cryptography.hazmat.primitives.asymmetric import padding
 #from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519, ed448, dsa, padding
 from enum import Enum
 from mitmproxy import certs
@@ -80,6 +81,34 @@ def get_cert_domains(x509_cert: certs.Cert) -> list[str]:
         pass
 
     return list(domains)
+
+def is_self_signed(cert: x509.Certificate) -> bool:
+    """
+    Return True if a certificate is self-signed.
+    """
+    from chain_builder import verify_signature
+    
+    # A self-signed cert must have identical subject and issuer.
+    if cert.subject != cert.issuer:
+        return False
+    # Verify the signature using the certificate's own public key.
+    try:
+        verify_signature(cert, cert)
+        return True
+    except Exception as e:
+        logging.error(f'Exception encountered while verifying self-signed cert digital signature verification.')
+        return False
+
+def chain_terminates_in_root(chain: list[x509.Certificate]) -> bool:
+    """
+    Given an ordered list of x509.Certificate objects (leaf -> root),
+    return True if the last certificate is a self-signed root.
+    """
+    if not chain:
+        return False
+
+    last_cert = chain[-1]
+    return is_self_signed(last_cert)
 
 def calculate_spki_hash(cert: x509.Certificate, hash_type: str, hex: bool = False) -> str:
     """
@@ -191,3 +220,4 @@ def clean_error(html_string: str) -> str:
     clean_error_text = tree.text_content()
     
     return clean_error_text
+

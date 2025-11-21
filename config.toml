@@ -8,8 +8,8 @@ dns_timeout = 1.25
 
 # Provide IP(s) for trusted DNSSEC-validating resolver(s) such as Unbound, PowerDNS, or BIND with support for Extended DNS Errors (RFC8914) enabled.
 # CertGuard will rotate through configured resolvers in round-robin fashion to avoid being ratelimited by upstream providers
-#resolvers = ['1.1.1.1', '9.9.9.9', '8.8.8.8'] # Cloudflare, Quad9, and Google resolvers, respectively, but note that using public resolvers over insecure channels introduces significant risks.
-resolvers = ['127.0.0.1']
+resolvers = ['1.1.1.1', '9.9.9.9', '8.8.8.8'] # Cloudflare, Quad9, and Google resolvers, respectively, but note that using public resolvers over insecure channels introduces significant risks.
+#resolvers = ['127.0.0.1']
 
 # OPTIONAL: Provide the path to a directory that contains custom root certificate files in PEM format.
 # Note: All root certificate files must have a ".pem" file extension.

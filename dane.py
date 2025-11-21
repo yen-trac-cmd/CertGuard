@@ -13,7 +13,7 @@ from CertGuardConfig import Config
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization #, hashes
 from enum import IntEnum
-from helper_functions import get_ede_description
+from helper_functions import get_ede_description, chain_terminates_in_root
 from chain_builder import verify_signature
 from mitmproxy import connection #tls, http, certs
 from typing import Sequence, Optional, Tuple
@@ -50,23 +50,15 @@ class DANETLSAValidator:
         self.cache = {}
         self.stats = {"validated": 0, "dane_failed": 0, "no_tlsa": 0, "dns_failed": 0, "dnssec_failed": 0}
 
-    def perform_dane_check(self, root_store, conn: connection.Server) -> None:
+    def perform_dane_check(self, conn: connection.Server, chain: list[x509.Certificate]) -> None:
         """Performs DANE validation logic against certificate chain"""
         logging.warning(f"Flow Connection ID:       {conn.id}")
-        conn.address
         hostname = conn.address[0]
         port = conn.address[1]
         
-        # Get the server certificate
-        if not conn or not hasattr(conn, 'certificate_list') or not conn.certificate_list:
-            logging.debug(f"No certificate available for {hostname}")
-            return
-
-        chain = [cert.to_cryptography() for cert in conn.certificate_list]
-
         # Validate chain using DANE
         try:
-            result, validation_error = self.validate_dane(root_store, hostname, port, chain)
+            result, validation_error = self.validate_dane(hostname, port, chain)
         except Exception as e:
             logging.error(f"Error during DANE validation for {hostname}: {e}")
         
@@ -106,13 +98,13 @@ class DANETLSAValidator:
             logging.error('Unexpected condition; failing closed')
             self.violation = f"⛔ Unepxected error encountered during DANE checks.{f'<br>&emsp;&emsp;▶ ' + ", ".join(validation_error) if validation_error else ''}"
     
-    def validate_dane(self, root_store, hostname: str, port: int, chain: list[x509.Certificate]) -> str:
+    def validate_dane(self, hostname: str, port: int, chain: list[x509.Certificate]) -> str:
         """
         Validate certificate against TLSA records.
         Args:
             hostname:       FQDN from which to construct the TLSA DNS query
             port:           TCP port used for HTTPS connection
-            cert_pem:       Server certificate in PEM-formatted bytes.
+            chain:          Server certificate chain with root cert (if identified previously)
 
         Returns:
             "dane_valid":    DANE validation successful
@@ -217,29 +209,17 @@ class DANETLSAValidator:
             self.cache[cache_key] = tlsa_records  
             logging.debug(f'Added to TLSA record(s) to session cache under key {cache_key}.')
 
-        # Fetch root
-        no_root = True
-        root = get_dane_root(chain, root_store)
-        if root[0]:
-            chain.append(root[0])
-            no_root = False
-        else:
-            logging.error(f'Could not locate root certificate for presented chain with Subject of: {root[1]}')
-
-        logging.warning(f'Length of chain (including root): {len(chain)}')
-        #logging.warning(f'Chain (including root): {chain}')
-
         # Validate against each TLSA record
         x509_cert = chain[0]
         for tlsa in tlsa_records:
-            dane_validated, dane_error = self.check_tlsa_record(tlsa, chain, x509_cert, no_root)
+            dane_validated, dane_error = self.check_tlsa_record(tlsa, chain, x509_cert)
             if dane_validated:
                 return "dane_valid", None
         
         # If landed here, no TLSA records matched
         return "dane_failed", dane_error
 
-    def check_tlsa_record(self, tlsa: dns.rdata.Rdata, chain: list[x509.Certificate], cert: x509.Certificate, no_root: bool) -> bool:
+    def check_tlsa_record(self, tlsa: dns.rdata.Rdata, chain: list[x509.Certificate], cert: x509.Certificate) -> bool:
         """
         Check if certificate matches TLSA record.
         
@@ -256,39 +236,44 @@ class DANETLSAValidator:
         tlsa_cert_assoc_data = tlsa.cert
 
         # Get the data to match based on selector
-        # TODO: This logic works if usage == 1 or usage == 3, but haven't encountered DANE-asserted self-signed certs or certs that chain to a private
-        # PKI with usage types 0 or 2.
+        # TODO: I haven't encountered any DANE-asserted self-signed certs or certs that chain to a private PKI to test against.  If/when I do, 
+        #       additional logic will need to be added, but to date all the type 2 & 3 usage I've encountered still uses WebPKI certs.
 
         if usage not in [0,1,2,3]:
-            logging.error(f'Invalid DANE usage parameter: {usage}')
-            return False, [f"Invalid DANE usage parameter: {usage}"]
+            error = f'Invalid DANE usage parameter: {usage}'
+            logging.error(error)
+            return False, [error]
+
+        if selector not in [0,1]:
+            error = f"Unknown DANE selector value: {selector}"
+            logging.warning(error)
+            return False, [error]
+
+        if matching_type not in [0,1,2]:
+            error = f"Unknown matching type: {matching_type}"
+            logging.warning(error)
+            return False, [error]
 
         # Set type for later checking by, and potential bypass of Root, CAA, and CT functions in main module.
         self.dane_usage_type = usage
 
         if usage == 0 or usage == 2:
-            if usage == 0 and no_root:  # MUST be able to chain up to root cert from local trust store for WebPKI Trust Anchor usage
+            if usage == 0 and not chain_terminates_in_root(chain):  # MUST be able to chain up to root cert from local trust store for WebPKI Trust Anchor usage
                 return False, [f"Could not verify cert chain against trusted WebPKI root cert."]
             
             if selector == 0:  # Full certificate
                 # Extract all certs in chain except for leaf cert (which would only be appropriate for Usage type 1 or 3)
                 data_list = [cert.public_bytes(encoding=serialization.Encoding.DER) for cert in chain[1:]]
-            elif selector == 1:  # SubjectPublicKeyInfo
+            else: # selector == 1 (SubjectPublicKeyInfo)
                 data_list = [cert.public_key().public_bytes(encoding=serialization.Encoding.DER, format=serialization.PublicFormat.SubjectPublicKeyInfo) for cert in chain]
-            else:
-                logging.warning(f"Unknown DANE selector value: {selector}")
-                return False, [f"Unknown DANE selector value: {selector}"]
             
             # Apply matching type
             if matching_type == 0:  # Exact match
                 computed_list = data_list
             elif matching_type == 1:  # SHA-256
                 computed_list = [hashlib.sha256(data).digest() for data in data_list]
-            elif matching_type == 2:  # SHA-512
+            else: # matching_type == 2 (SHA-512)
                 computed_list = [hashlib.sha512(data).digest() for data in data_list]
-            else:
-                logging.warning(f"Unknown matching type: {matching_type}")
-                return False, [f"Unknown matching type: {matching_type}"]
 
             logging.debug(f'Checking against TLSA record: {tlsa}')
 
@@ -307,22 +292,16 @@ class DANETLSAValidator:
         elif usage == 1 or usage == 3:
             if selector == 0:  # Full certificate
                 data = cert.public_bytes(encoding=serialization.Encoding.DER)
-            elif selector == 1:  # SubjectPublicKeyInfo
+            else: # selector = 1 (SubjectPublicKeyInfo)
                 data = cert.public_key().public_bytes(encoding=serialization.Encoding.DER, format=serialization.PublicFormat.SubjectPublicKeyInfo)
-            else:
-                logging.warning(f"Unknown DANE selector value: {selector}")
-                return False, [f"Unknown DANE selector value: {selector}"]
             
             # Apply matching type
             if matching_type == 0:  # Exact match
                 computed = data
             elif matching_type == 1:  # SHA-256
                 computed = hashlib.sha256(data).digest()
-            elif matching_type == 2:  # SHA-512
+            else: # matching_type == 2 (SHA-512)
                 computed = hashlib.sha512(data).digest()
-            else:
-                logging.warning(f"Unknown matching type: {matching_type}")
-                return False, [f"Unknown matching type: {matching_type}"]
         
             logging.debug(f'Computed value from certificate to match against, based on TLSA selector and matching type: {computed.hex()}')
             #logging.debug(f'Checking against TLSA record: {tlsa}')
@@ -360,13 +339,14 @@ class DANETLSAValidator:
         print(f"  DNS Failed: {self.stats['dns_failed']}")
         print(f"  DNSSEC Failed: {self.stats['dnssec_failed']}") 
 
-def get_dane_root(server_chain: Sequence[x509.Certificate], root_store: Sequence[x509.Certificate]) -> Tuple[Optional[x509.Certificate], Optional[str]]:
+'''
+def get_dane_root(server_chain: Sequence[x509.Certificate], root_store: list[x509.Certificate]) -> Tuple[Optional[x509.Certificate], Optional[str]]:
     """
     Given an x509.Certificate chain and trusted root store, attempt to identify the root CA certificate for the server's certificate chain.
 
     Args:
-        chain (Sequence): Ordered x509 certificate chain presented by the server (leaf first, intermediates, and optionally a root cert)
-        root_store (Sequence[x509.Certificate]): List of trusted root certificates to match against.
+        chain:      Ordered x509 certificate chain presented by the server (leaf first, intermediates, and optionally a root cert)
+        root_store: List of trusted root certificates to match against.
     Returns:
         Tuple[Optional[x509.Certificate], Optional[str]]: (root_cert, identifier)
             root_cert: matched root cert from root_store, or None if no match.
@@ -374,7 +354,7 @@ def get_dane_root(server_chain: Sequence[x509.Certificate], root_store: Sequence
     """
            
     # If using self-signed cert...
-    if len(server_chain) == 1:
+    if len(server_chain) == 1 and server_chain[0].subject == server_chain[0].issuer:
         self_signed = server_chain[0].issuer.rfc4514_string()
         logging.error(f'Self-signed certificate; Subject = {self_signed}')
         return (None, self_signed)
@@ -398,3 +378,4 @@ def get_dane_root(server_chain: Sequence[x509.Certificate], root_store: Sequence
         return (None, last_cert.issuer.get_attributes_for_oid(x509.NameOID.COMMON_NAME)[0].value)
     except:
         return (None, last_cert.issuer.rfc4514_string())
+'''

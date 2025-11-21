@@ -1,14 +1,14 @@
 from ca_org_mapping import ca_org_to_caa
+from ca_org_mapping import ca_org_to_country
 from CertGuardConfig import Config, ErrorLevel, Logger, BYPASS_PARAM
 from chain_builder import normalize_chain
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 #from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519, ed448, dsa, padding
-from cryptography.x509 import ObjectIdentifier, UnrecognizedExtension
+#from cryptography.x509 import ObjectIdentifier, UnrecognizedExtension, NameOID
 #from cryptography.x509.oid import ExtensionOID, NameOID, ExtendedKeyUsageOID
 #from cryptography.x509.extensions import SubjectKeyIdentifier
-import chain_builder
 from dane import DANETLSAValidator
 from datetime import datetime, timedelta, timezone
 from dns.rdtypes.ANY import CAA
@@ -21,6 +21,8 @@ from tls_extensions import OCSPStaplingConfig
 from typing import Sequence, Optional, Tuple
 from urllib.parse import urlparse
 import certifi
+import chain_builder
+import ct
 import json
 import logging
 import os
@@ -28,9 +30,6 @@ import revocation_logic
 import sqlite3
 import sys
 import uuid
-import verify_SCTs
-
-config = Config()
 
 def load(loader: addonmanager.Loader) -> None:
     """
@@ -124,7 +123,7 @@ def get_root_store() -> list[x509.Certificate]:
             logging.critical(f"Could not find directory specified for 'custom_roots_dir': {config.custom_roots_dir}.")
             logging.critical(f"Please check configuration in config.toml file or create/populate custom roots directory.")
 
-    roots = []
+    roots: list[x509.Certificate] = []
     for pem_block in root_bundle.split(b"-----END CERTIFICATE-----"):
         pem_block = pem_block.strip()
         if pem_block:
@@ -133,7 +132,6 @@ def get_root_store() -> list[x509.Certificate]:
                 roots.append(x509.load_pem_x509_certificate(pem_block, default_backend()))
             except Exception:
                 pass
-                
     logging.info(f'Total root certificates loaded: {len(roots)}')
     return roots
 
@@ -191,33 +189,52 @@ def root_country_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) 
     """
     logging.warning(f"-----------------------------------Entering root_country_check()----------------------------------")
     
-    root = cert_chain[-1]
-    logging.info(f'Root certificate subject:       {root.subject.rfc4514_string()}')
-
-    # Extract country value from subject of root cert
-    root_country = root.subject.get_attributes_for_oid(x509.oid.NameOID.COUNTRY_NAME)
-
-    if len(root_country) == 0:
-        logging.warning(f"==>> No Country value found in Root CA cert: {root.subject.rfc4514_string()}")  # 
-        violation = f'ℹ️ No Country (C=) value found in Root CA cert: <b>{root.subject.rfc4514_string()}</b>'
-        return ErrorLevel.NOTICE, violation
-    elif len(root_country) > 1:
-        logging.critical(f"==>> Multiple Country values found in Root CA cert: {root.subject.rfc4514_string()}")
-        violation = f"⛔ Multiple Country (C=) values found in Root CA cert: <b>{root.subject.rfc4514_string()}</b>"
-        return ErrorLevel.FATAL, violation
+    # Check for self-signed or unchained certs; no point in checking Country or Org in this case
+    
+    if len(cert_chain) == 1:
+        # Skip for self-signed
+        if cert_chain[0].subject == cert_chain[0].issuer:
+            return ErrorLevel.NONE, None
+        else:    # Best-effort attempt to identify country from issuing CA
+            ca_type = "Issuing"
+            ca_cert = cert_chain[0].issuer
+            logging.info(f'{ca_type} certificate subject:      {ca_cert.rfc4514_string()}')
     else:
-        root_country=root_country[0].value
-        logging.info(f"Country attribute for root:     {root_country} ")
+        ca_type = "Root"
+        ca_cert = cert_chain[-1].subject
+        logging.info(f'{ca_type} certificate subject:      {ca_cert.rfc4514_string()}')
 
-        if root_country in config.blocklist:
-            violation = f"⛔ Root CA is located in a <b style='color:red;'>blocklisted</b> country: <b>{config.iso_country_map[root_country]}</b>"
-            logging.error(f'Root CA for {flow.request.pretty_url} is located in a blocklisted country: {config.iso_country_map[root_country]}')
-            return ErrorLevel.FATAL, violation
+    # Extract country value from CA cert
+    ca_country = ca_cert.get_attributes_for_oid(x509.NameOID.COUNTRY_NAME)
+    #logging.warning(f'ca_country = {ca_country},  type = {type(ca_country)}   length = {len(ca_country)}')
+    if len(ca_country) == 1:
+        ca_country = ca_country[0].value
+    elif len(ca_country) == 0:
+        org = ca_cert.get_attributes_for_oid(x509.NameOID.ORGANIZATION_NAME)
+        #logging.warning(f'org = {org},  type = {type(org)}, length = {len(org)}')
+        org_name = org[0].value
+        if ca_org_to_country.get(org_name):
+            ca_country = ca_org_to_country[org_name]
+        else:
+            logging.warning(f"No Country value found in {ca_type} CA cert: {ca_cert.rfc4514_string()}")  # 
+            violation = f'ℹ️ No Country (C=) value found in {ca_type} CA cert: <br>&emsp;&emsp;<b>{ca_cert.rfc4514_string()}</b>'
+            return ErrorLevel.NOTICE, violation
+    elif len(ca_country) > 1:
+        logging.critical(f"Multiple Country values found in {ca_type} CA cert: {ca_cert.rfc4514_string()}")
+        violation = f"⛔ Multiple Country (C=) values found in {ca_type} CA cert: <b>{ca_cert.rfc4514_string()}</b>"
+        return ErrorLevel.FATAL, violation  
 
-        if (config.filtering_mode == 'allow' and root_country not in config.country_list) or (config.filtering_mode == 'warn' and root_country in config.country_list):
-            violation = f"⚠️ Root CA is located in <strong>{config.iso_country_map[root_country]}</strong>."
-            logging.warning(f'Root CA is located in: {config.iso_country_map[root_country]}')
-            return ErrorLevel.CRIT, violation
+    logging.info(f"Country attribute for {ca_type} CA: {ca_country} ")
+
+    if ca_country in config.blocklist:
+        violation = f"⛔ {ca_type} CA is located in a <b style='color:red;'>blocklisted</b> country: <b>{config.iso_country_map[ca_country]}</b>"
+        logging.error(f'{ca_type} CA for {flow.request.pretty_url} is located in a blocklisted country: {config.iso_country_map[ca_country]}')
+        return ErrorLevel.FATAL, violation
+
+    if (config.filtering_mode == 'allow' and ca_country not in config.country_list) or (config.filtering_mode == 'warn' and ca_country in config.country_list):
+        violation = f"⚠️ {ca_type} CA is located in <strong>{config.iso_country_map[ca_country]}</strong>."
+        logging.warning(f'{ca_type} CA is located in: {config.iso_country_map[ca_country]}')
+        return ErrorLevel.CRIT, violation
             
     return ErrorLevel.NONE, None
 
@@ -244,11 +261,11 @@ def controlled_CA_checks(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]
     identifiers=[]
     
     root = cert_chain[-1]
-    root_cn = root.subject.get_attributes_for_oid(x509.oid.NameOID.COMMON_NAME)
+    root_cn = root.subject.get_attributes_for_oid(x509.NameOID.COMMON_NAME)
     if root_cn:
         identifiers.append(root_cn[0].value)
     
-    root_org = root.subject.get_attributes_for_oid(x509.oid.NameOID.ORGANIZATION_NAME)
+    root_org = root.subject.get_attributes_for_oid(x509.NameOID.ORGANIZATION_NAME)
     if root_org:
         identifiers.append(root_org[0].value)
 
@@ -397,9 +414,9 @@ def critical_ext_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) 
     unknowns = []
     for i, cert in enumerate(cert_chain):
         for ext in cert.extensions:
-            if ext.critical and isinstance(ext.value, UnrecognizedExtension):
+            if ext.critical and isinstance(ext.value, x509.UnrecognizedExtension):
                 unrecognized = True
-                oid: ObjectIdentifier = ext.oid.dotted_string
+                oid: x509.ObjectIdentifier = ext.oid.dotted_string
                 # ext.value.value is the raw bytes of the extension
                 raw = ext.value.value
                 logging.critical(f"Unknown critical X.509 extension found in cert #{i} ({cert.subject.rfc4514_string})")
@@ -471,9 +488,9 @@ def prior_approval_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]
 def sct_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Tuple[ErrorLevel, Optional[str]]:
     logging.warning("-----------------------------------Entering sct_check()-------------------------------------------")
     
-    # If self-signed cert, skip SCT checks
+    # Skip SCT checks
     if len(cert_chain) == 1:
-        logging.warning('Skipping SCT checks for self-signed certificate.')
+        logging.warning('Skipping SCT checks due to incomplete cert chain or self-signed certificate.')
         return ErrorLevel.NONE, None
 
     cert = cert_chain[0]
@@ -485,7 +502,7 @@ def sct_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Tuple[
     logging.debug(f'Issuer cert: {issuer_cert.subject.rfc4514_string()}')
     
     # Check for SCTs & extract data
-    scts = verify_SCTs.extract_scts(cert, ct_log_map)
+    scts = ct.extract_scts(cert, ct_log_map)
     if not scts:
         # TODO: Update code to account for external SCTs (e.g. delivered via OCSP or during TLS negotation).  Although these
         # alternative SCT delivery methods are exceedingly rare, this check should not result in FATAL errors until those methods are added.
@@ -504,7 +521,7 @@ def sct_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Tuple[
         
         # Validate SCT digital signatures (if enabled)
         if config.verify_signatures:
-            validated, error, leaf_struct = verify_SCTs.validate_signature(cert, issuer_cert, sct)
+            validated, error, leaf_struct = ct.validate_signature(cert, issuer_cert, sct)
             if error:
                 logging.error(f"Error during SCT validation attempt for SCT #{i}: {error}")
                 warnings.append(f'⚠️ Encountered error trying to validate SCT #{i}: {error}')
@@ -516,7 +533,7 @@ def sct_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Tuple[
 
         # Cryptographically audit CT log inclusion (if enabled)
         if validated and config.verify_inclusion:
-            included, error = verify_SCTs.verify_inclusion(leaf_struct, sct["ct_log_url"], sct["timestamp_unix"], sct["ct_log_mmd"])
+            included, error = ct.verify_inclusion(leaf_struct, sct["ct_log_url"], sct["timestamp_unix"], sct["ct_log_mmd"])
             if included:
                 logging.info(f" Inclusion in {sct["ct_log_description"]} verified")    
             else:
@@ -550,7 +567,7 @@ def ct_quick_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> T
             return ErrorLevel.NONE, None
 
         violations = []
-        found, revoked, error = verify_SCTs.ctlog_quick_check(flow, cert)
+        found, revoked, error = ct.ctlog_quick_check(flow, cert)
 
         if error:
             logging.error(f'Could not check SSLMate for Certificate Transparency inclusion: {error}.')
@@ -601,9 +618,9 @@ def verify_cert_caa(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> 
     logging.warning("-----------------------------------Entering verify_cert_caa()-------------------------------------")
 
     x509_leaf = cert_chain[0]
-
+    fqdn = (flow.request.pretty_host).lower()
     orgs=[]
-    for attr in x509_leaf.issuer.get_attributes_for_oid(x509.oid.NameOID.ORGANIZATION_NAME):
+    for attr in x509_leaf.issuer.get_attributes_for_oid(x509.NameOID.ORGANIZATION_NAME):
         org = attr.value
         orgs.append(org)
         logging.info(f' Extracted Organization for Issuing CA Cert:  O="{org}"')
@@ -627,7 +644,6 @@ def verify_cert_caa(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> 
     logging.debug(f'All domains from leaf cert: {cert_domains}')
     
     check_domains=[]
-    fqdn = (flow.request.pretty_host).lower()
     if fqdn in cert_domains:
         check_domains.append(fqdn)
         
@@ -717,6 +733,7 @@ def check_caa_per_domain(domain: str, ca_identifiers: list[str]) -> tuple[bool, 
 
             query = dns.message.make_query(check_domain, dns.rdatatype.CAA, want_dnssec=True)
             got_response=False
+            attempt = 0
             while got_response==False:
                 try:
                     answers = dns.query.udp_with_fallback(query, current_resolver, timeout=config.dns_timeout)  # timeout parameter is required, otherwise mitmproxy can freeze
@@ -726,10 +743,13 @@ def check_caa_per_domain(domain: str, ca_identifiers: list[str]) -> tuple[bool, 
                     current_resolver = config.resolvers[0]
                     logging.error(f'DNS query using resolver {config.resolvers[-1]} for "{check_domain}" timed out!!  ...Trying again with resolver {current_resolver}.')
                 except Exception as e:
+                    if attempt == 3:
+                        break
                     config.resolvers.rotate(1)
                     current_resolver = config.resolvers[0]
                     logging.debug(f"Exception encountered for DNS query using resolver {config.resolvers[-1]}: {e}")
                     logging.error(f'  --> Trying again with resolver {current_resolver}.')
+                    attempt += 1
 
             if answers[1]:
                 logging.warning(f'DNS query had to fallback to TCP due to truncated response')
@@ -838,7 +858,7 @@ def dane_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Tuple
     
     if flow.server_conn.tls:
         logging.debug(f'Flow Connection:       {flow.server_conn}')
-        dane_validator.perform_dane_check(root_store, flow.server_conn)
+        dane_validator.perform_dane_check(flow.server_conn, cert_chain)
         
     logging.debug(f'dane_validator.dnssec_failure: {dane_validator.dnssec_failure}')
     logging.debug(f'dane_validator.dane_failure:   {dane_validator.dane_failure}')
@@ -862,9 +882,10 @@ def record_decision(host, decision, root_fingerprint) -> None:
 
 #====================================================================== Main ===================================================================
 
+config = Config()                         # Class to set various CertGuard configuration parameters
 dane_validator = DANETLSAValidator()      # Class for DANE validation logic
 ocsp_addon = OCSPStaplingConfig()         # Class to inject OCSP Stapling requests into TLS handshake to upstream servers
-#addons = [ocsp_addon]
+addons = [ocsp_addon]
 
 approved_hosts = set()
 pending_requests = {}
@@ -875,13 +896,17 @@ root_store = get_root_store()
 # Populate Public Suffix List
 public_suffix_list = helper_functions.load_public_suffix_list()
  
-# Load Certificate Transparency, optionally passing in legacy CT log file.
+# Load Certificate Transparency log list, optionally passing in legacy CT log file.
+ct_log_map = ct.load_log_list()
+
+'''
 if os.path.exists("./resources/legacy_log.json"):
-    ct_log_map = verify_SCTs.load_ct_log_list(old_ct_log='./resources/legacy_log.json')
+    ct_log_map = ct.load_log_list(old_ct_log='./resources/legacy_log.json')
 else:
-    ct_log_map = verify_SCTs.load_ct_log_list()
+    ct_log_map = ct.load_log_list()
 if ct_log_map == None:
     logging.critical('Can not load Certificate Transparency log_list.json file!  Please check DNS resolution and Internet connectivity.')
+'''
 
 # Load file logger
 log = Logger.get_logger()
@@ -924,8 +949,8 @@ def request(flow: http.HTTPFlow) -> None:
                     violation = f'Found SCT in stapled OCSP response for <b>{flow.request.pretty_url}!!</b>.'
                     return ErrorLevel.INFO, violation
 
-                    # TODO: If ever encounter real-life SCT in stapled OCSP response, add code to pass into 
-                    # verify_SCTs.py for signature validation & inclusion proofing.
+                    # TODO: If ever encounter real-life SCT in stapled OCSP response, pass into Certificate Transparency 
+                    # module ("ct") for signature validation & inclusion proofing.
 
             # Clean up temporary storage
             del ocsp_addon.ocsp_by_connection[conn_id]
@@ -965,8 +990,11 @@ def request(flow: http.HTTPFlow) -> None:
     elif claimed_root:
         # Note: As currently constructed, this error cannot be anything less than FATAL since the 'Proceed Anyway' button won't work.
         #TODO: Add logic for DANE usage type 2, where root may be a private CA.
-        logging.error(f'FATAL: Could not validate trust anchor root ({claimed_root}) for cert chain!')
-        violations.append(f'⛔ Could not validate cert against claimed root of:<br>&emsp;&emsp;<b>{claimed_root}</b>')
+        logging.error(f'Could not validate cert against claimed Issuer cert of: ({claimed_root}).')
+        violations.append(f'⛔ Could not validate cert against claimed Issuer cert of:<br>&emsp;&emsp;<b>{claimed_root}</b>')
+        if len(cert_chain) == 1:
+            logging.error(f'Server failed to send complete certificate chain.')
+            violations.append('&emsp;&emsp;▶ Server failed to send complete certificate chain.')
         #error_screen(config, flow, None, ErrorLevel.FATAL.color, [violation], ErrorLevel.FATAL.value)
         highest_error_level = ErrorLevel.FATAL.value
         blockpage_color = ErrorLevel.FATAL.color
@@ -1047,17 +1075,17 @@ def request(flow: http.HTTPFlow) -> None:
 
     my_checks = [
         dane_check,
-        root_country_check, 
-        controlled_CA_checks, 
+        root_country_check,     # Optional for mass scanning
+        #controlled_CA_checks,   # Optional for mass scanning
         expiry_check, 
         revocation_checks, 
         identity_check, 
         critical_ext_check,
-        prior_approval_check, 
+        #prior_approval_check,   # Optional for mass scanning
         sct_check, 
-        #ct_quick_check,
+        #ct_quick_check,         # Can use this or the sct_check() and revocation_checks() for more thorough (albeit slower) validation.
         verify_cert_caa,
-        test_check,
+        #test_check,
     ] 
 
     for check in my_checks:
@@ -1068,23 +1096,43 @@ def request(flow: http.HTTPFlow) -> None:
         violations.append(violation)
 
     logging.info(f'-----------------------------------END verification for {host}--------------------------------------------')
+    
+    cleaned_errors = [clean_error(v) for v in violations if v]
+    logged_errors = cleaned_errors if cleaned_errors else None
+    flow.metadata["CertGuard_violations"] = logged_errors
+    flow.metadata["Highest_Errorlevel"] = highest_error_level
+    if is_main_page:
+        flow.metadata["Is_Main_Page"] = True
+
     logging.warning(f"----> The highest_error_level value is: {highest_error_level}.")
     if highest_error_level > ErrorLevel.NONE.value:
         error_screen(config, flow, token, blockpage_color, violations, highest_error_level)
-        
-        logged_errors = [clean_error(v) for v in violations if v]
-        json_errors = json.dumps(logged_errors)
-        log.info(f'"Domain": "{flow.request.pretty_host}", "Level": {highest_error_level}, "Violations": {json_errors}')
-        
         record_decision(host, "blocked", root_hash)
         logging.error(f"Request to {host} blocked; Token={token}")
     else:
         # If all checks have passed for a main page navigation, for performance reasons treat domain as cleared for remainder of mitmproxy session.
-        if is_main_page:
-            logging.info(f'All checks passed for {host}; caching as cleared host for this CertGuard session.')
-            approved_hosts.add(host)
-            logging.info(f'Approved & cleared hosts after adding in final block: {approved_hosts}')
-            return
+        logging.info(f'All checks passed for {host}; caching as cleared host for this CertGuard session.')
+        approved_hosts.add(host)
+        record_decision(host, "allowed", root_hash)
+        logging.info(f'Approved & cleared hosts after adding in final block: {approved_hosts}')
+
+def response(flow: http.HTTPFlow) -> None:
+    if flow.metadata.get("Is_Main_Page"):
+        highest_error_level = flow.metadata.get("Highest_Errorlevel", 0)
+        violations = flow.metadata.get("CertGuard_violations")
+        log_entry = {
+            "Response Code": flow.response.status_code, 
+            "FQDN": flow.request.pretty_host, 
+            "ErrorLevel": highest_error_level, 
+            "Violations": violations
+        }
+        
+        json_string = json.dumps(log_entry)
+        # Strip outter JSON brackets before passing to logger
+        json_fragment = json_string[1:-1]
+
+        log.info(json_fragment)
+
 def done():
     log_file = Logger.log_file
     dane_validator.done()

@@ -26,17 +26,24 @@ WoTrus:         https://www.wosign.com/CA/policy.htm
 
 Useful cross-references: 
   - https://www.entrust.com/knowledgebase/ssl/certification-authority-authorization-caa-record-ca-values
-  - https://web.archive.org/web/20250627075316/https://ccadb.my.salesforce-sites.com/ccadb/AllCAAIdentifiersReport
-  - https://web.archive.org/web/20250723091652/https://ccadb.my.salesforce-sites.com/mozilla/PublicAllIntermediateCerts
-  - 
+  - https://www.ccadb.org/resources
 '''
+# Some public CAs have root certificates that predate the CA/Browser Forum Baseline Requirements v1.3.0 (https://cabforum.org/uploads/CAB-Forum-BR-1.3.0.pdf)
+# and, thus, may not have a Country ("C=") value listed in a root's Distinguished Name.  The dictionary below will be consulted when encountering
+# such roots to identify the country (in ISO-3166-alpha2 form) that the Certification Authority is headquartered in.
+ca_org_to_country = {
+  "GlobalSign": "BE",
+  "Digital Signature Trust Co.": "US",
+  "Entrust.net": "US",
+  "TeliaSonera": "SE",
+}
 
-# Map common Issuing CA Organization ("O=" field from x.509 Subject) to CAA identifier(s)
+# Map common Issuing CAs to their expected CAA identifiers using the Organization name (e.g. "O=" value) listed in their x.509 certificates.
 # Initially limited to Intermediate CAs appearing 10 or more times on Mozilla's list at https://wiki.mozilla.org/CA/Intermediate_Certificates.
 # Leaving out entry for "泰尔认证中心有限公司", which corresponds to "TL Certification Center Co., Ltd." based out of China.  
 #    It chains to Sectigo and Asseco root CAs, but I cannot locate a CPS statement for them and do not trust them to issue certs for domains
 #    that have only/explicitly authorized Sectigo or Asseco to issue certs.
-ca_org_to_caa  = {
+ca_org_to_caa = {
   "行政院": ["gca.nat.gov.tw"],
   "AC CAMERFIRMA S.A.": ["camerfirma.com"],
   "ACCV": ["accv.es"],

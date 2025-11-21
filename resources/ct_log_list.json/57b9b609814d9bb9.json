@@ -1,8 +1,8 @@
 {
-  "created_at": "2025-11-15T21:23:42.400112+00:00",
-  "elapsed": 0.069393,
+  "created_at": "2025-11-21T05:18:58.625215+00:00",
+  "elapsed": 0.0804,
   "encoding": "UTF-8",
-  "expires": "2025-11-16T21:23:42.400076+00:00",
+  "expires": "2025-11-22T05:18:58.625187+00:00",
   "headers": {
     "Accept-Ranges": "bytes",
     "Access-Control-Allow-Origin": "*",
@@ -10,14 +10,14 @@
     "Cache-Control": "public, max-age=3000",
     "Content-Disposition": "attachment; filename=\"log_list.json\"",
     "Content-Encoding": "br",
-    "Content-Length": "9647",
+    "Content-Length": "9652",
     "Content-Security-Policy": "require-trusted-types-for 'script'; report-uri https://csp.withgoogle.com/csp/cert-log-ninjas",
     "Content-Type": "application/json; charset=UTF-8",
     "Cross-Origin-Opener-Policy": "same-origin; report-to=\"cert-log-ninjas\"",
     "Cross-Origin-Resource-Policy": "cross-origin",
-    "Date": "Sat, 15 Nov 2025 21:23:42 GMT",
-    "Expires": "Sat, 15 Nov 2025 22:13:42 GMT",
-    "Last-Modified": "Sat, 15 Nov 2025 14:27:28 GMT",
+    "Date": "Fri, 21 Nov 2025 05:18:58 GMT",
+    "Expires": "Fri, 21 Nov 2025 06:08:58 GMT",
+    "Last-Modified": "Thu, 20 Nov 2025 14:40:36 GMT",
     "Report-To": "{\"group\":\"cert-log-ninjas\",\"max_age\":2592000,\"endpoints\":[{\"url\":\"https://csp.withgoogle.com/csp/report-to/cert-log-ninjas\"}]}",
     "Server": "sffe",
     "Vary": "Accept-Encoding",
@@ -31,7 +31,7 @@
       "Accept": "*/*",
       "Accept-Encoding": "gzip, deflate, br, zstd",
       "Connection": "keep-alive",
-      "If-Modified-Since": "Fri, 14 Nov 2025 15:27:28 GMT",
+      "If-Modified-Since": "Tue, 18 Nov 2025 14:35:56 GMT",
       "User-Agent": "python-requests/2.32.3"
     },
     "method": "GET",
@@ -40,8 +40,8 @@
   "status_code": 200,
   "url": "https://www.gstatic.com/ct/log_list/v3/log_list.json",
   "_decoded_content": {
-    "version": "74.26",
-    "log_list_timestamp": "2025-11-15T12:57:08Z",
+    "version": "75.1",
+    "log_list_timestamp": "2025-11-20T12:53:20Z",
     "operators": [
       {
         "name": "Google",
@@ -225,8 +225,8 @@
             "url": "https://ct.cloudflare.com/logs/nimbus2027/",
             "mmd": 86400,
             "state": {
-              "qualified": {
-                "timestamp": "2025-09-05T00:00:00Z"
+              "usable": {
+                "timestamp": "2025-11-15T00:00:00Z"
               }
             },
             "temporal_interval": {

@@ -10,4 +10,5 @@ scripts/
 *.log
 
 # Testing
+test.py
 test*.py

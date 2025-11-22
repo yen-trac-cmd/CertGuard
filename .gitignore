@@ -8,6 +8,7 @@ custom_roots/
 scripts/
 *.db
 *.log
+logfile*
 
 # Testing
 test.py

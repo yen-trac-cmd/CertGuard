@@ -1114,7 +1114,7 @@ def request(flow: http.HTTPFlow) -> None:
         logging.info(f'All checks passed for {host}; caching as cleared host for this CertGuard session.')
         approved_hosts.add(host)
         record_decision(host, "allowed", root_hash)
-        logging.info(f'Approved & cleared hosts after adding in final block: {approved_hosts}')
+        #logging.info(f'Approved & cleared hosts after adding in final block: {approved_hosts}')
 
 def response(flow: http.HTTPFlow) -> None:
     if flow.metadata.get("Is_Main_Page"):

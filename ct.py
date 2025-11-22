@@ -21,12 +21,6 @@ from enum import IntEnum
 from mitmproxy import http
 from typing import Optional, Tuple
 
-# Fetch SSLMate API key from environment variable.  TODO: Migrate to proper key vault.
-try:
-    SSLMATE_KEY = os.environ["SSLMATE_KEY"]
-except:
-    logging.critical("Please define the 'SSLMATE_KEY' environment variable with your API key from SSLMate.com.")
-
 SSLMATE_QUERY_URL = "https://api.certspotter.com/v1/issuances"
 CT_LOG_LIST_URL   = "https://www.gstatic.com/ct/log_list/v3/log_list.json"     # Google's authoritative CT Log list
 
@@ -299,6 +293,12 @@ def ctlog_quick_check(flow: http.HTTPFlow, leaf_cert: x509.Certificate) -> Tuple
         [str]:      Error message if unable to query SSLMate
     """
     logging.warning("-----------------------------------Entering ctlog_quick_check()-----------------------------------")
+    # Fetch SSLMate API key from environment variable.
+    try:
+        SSLMATE_KEY = os.environ["SSLMATE_KEY"]
+    except:
+        logging.critical("Please define the 'SSLMATE_KEY' environment variable with your API key from SSLMate.com.")
+
     leaf_cert_sha256 = leaf_cert.fingerprint(hashes.SHA256()).hex()
     logging.info(f'Leaf cert SHA256 fingerprint:   {leaf_cert_sha256}')
     

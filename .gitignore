@@ -4,7 +4,7 @@ __pycache__/
 *$py.class
 
 # CertGuard private content
-custom_roots/
+custom_roots/*
 scripts/
 *.db
 *.log

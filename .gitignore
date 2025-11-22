@@ -11,5 +11,4 @@ scripts/
 logfile*
 
 # Testing
-test.py
-test*.py
+test*

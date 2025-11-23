@@ -1,7 +1,5 @@
 import logging
-
-import OpenSSL
-from CertGuardConfig import Config
+from certguard_config import Config
 from mitmproxy import tls
 from mitmproxy.addons.tlsconfig import TlsConfig
 from OpenSSL import SSL
@@ -9,7 +7,7 @@ from cryptography.x509 import ocsp, UnrecognizedExtension, Certificate
 from chain_builder import deduplicate_chain
 from revocation_logic import validate_ocsp_signature
 
-CONFIG = Config()
+config = Config()
 
 class OCSPStaplingConfig(TlsConfig):
     def __init__(self) -> None:
@@ -29,7 +27,7 @@ class OCSPStaplingConfig(TlsConfig):
             self.failed_domains = set()
 
     def tls_start_server(self, tls_start: tls.TlsData) -> None:
-        if not CONFIG.revocation_checks:
+        if not config.revocation_checks:
             return
         
         logging.info('===================================BEGIN New TLS negotiation======================================')
@@ -49,7 +47,7 @@ class OCSPStaplingConfig(TlsConfig):
             ssl_ctx = tls_start.ssl_conn.get_context()
 
             # Create callback to receive OCSP response
-            def ocsp_callback(conn: OpenSSL.SSL.Connection, ocsp_data, user_data) -> bool:
+            def ocsp_callback(conn: SSL.Connection, ocsp_data, user_data) -> bool:
                 """Callback to receive OCSP response from server"""
                 try:
                     if ocsp_data:
@@ -205,7 +203,7 @@ class OCSPStaplingConfig(TlsConfig):
     def tls_established_server(self, data: tls.TlsData) -> None:
         """Called after TLS handshake is complete"""
         
-        if not CONFIG.revocation_checks:
+        if not config.revocation_checks:
             return
         sni = data.conn.sni or str(data.conn.address[0])
         conn_id = id(data.conn)

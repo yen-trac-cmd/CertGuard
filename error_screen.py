@@ -1,4 +1,4 @@
-from CertGuardConfig import ErrorLevel, BYPASS_PARAM
+from certguard_config import ErrorLevel, BYPASS_PARAM
 from mitmproxy import http
 from urllib.parse import urlencode, urlparse, parse_qs, urlunparse
 
@@ -97,4 +97,4 @@ def error_screen(config, flow, token, color, violations, error_level):
         """
        
     warning_html = "\n".join(line.rstrip() for line in warning_html.splitlines() if line.strip())
-    flow.response = http.Response.make(403, warning_html, {"Content-Type": "text/html", "Cache-Control": "no-cache, no-store, must-revalidate", "Expires": "0"} )
+    flow.response = http.Response.make(615, warning_html, {"Content-Type": "text/html", "Cache-Control": "no-cache, no-store, must-revalidate", "Expires": "0"} )

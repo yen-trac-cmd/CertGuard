@@ -1,11 +1,10 @@
 from cryptography import x509
-#import cryptography
 from cryptography import exceptions
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import dsa, ec, ed25519, ed448, padding, rsa
-from cryptography.x509 import ocsp
-from cryptography.x509.oid import ExtensionOID, NameOID, ExtendedKeyUsageOID
+from cryptography.x509 import ocsp, ExtendedKeyUsageOID
+from cryptography.x509.oid import ExtensionOID, NameOID
 from datetime import datetime, timezone
 from requests.exceptions import RequestException
 from typing import Tuple, Optional
@@ -186,10 +185,7 @@ def _get_ocsp_revocation_reason(ocsp_resp) -> Optional[str]:
 def _get_ocsp_urls(cert: x509.Certificate) -> list:
     """Extract OCSP URLs from certificate's Authority Information Access extension."""
     try:
-        aia = cert.extensions.get_extension_for_oid(
-            x509.oid.ExtensionOID.AUTHORITY_INFORMATION_ACCESS
-        ).value
-        
+        aia = cert.extensions.get_extension_for_oid(ExtensionOID.AUTHORITY_INFORMATION_ACCESS).value
         urls = []
         for desc in aia:
             if desc.access_method == x509.oid.AuthorityInformationAccessOID.OCSP:
@@ -203,9 +199,7 @@ def _get_crl_urls(cert: x509.Certificate) -> list:
     """Extract CRL URLs from certificate's CRL Distribution Points (CDP) extension."""
     logging.warning(f"-----------------------------------Entering _get_crl_urls()---------------------------------------")
     try:
-        crl_dp = cert.extensions.get_extension_for_oid(
-            x509.oid.ExtensionOID.CRL_DISTRIBUTION_POINTS
-        ).value
+        crl_dp = cert.extensions.get_extension_for_oid(ExtensionOID.CRL_DISTRIBUTION_POINTS).value
         
         urls = []
         for dp in crl_dp:
@@ -446,8 +440,8 @@ def validate_ocsp_signature(ocsp_resp: ocsp.OCSPResponse, cert_chain: list[x509.
                 # Delegated responders MUST have id-kp-OCSPSigning EKU per RFC6960, but I'm encountering a parser bug in the Cryptography library
                 # Parse raw DER bytes as an interim workaround
                 try:
-                    eku = ocsp_cert.extensions.get_extension_for_oid(x509.ExtensionOID.EXTENDED_KEY_USAGE).value
-                    if x509.ExtendedKeyUsageOID.OCSP_SIGNING in eku:
+                    eku = ocsp_cert.extensions.get_extension_for_oid(ExtensionOID.EXTENDED_KEY_USAGE).value
+                    if ExtendedKeyUsageOID.OCSP_SIGNING in eku:
                         logging.info("   - Cert has the necessary OCSP Responder Signing Extended EKU (OID 1.3.6.1.5.5.7.3.9).")
                         candidate_responder_certs.append(ocsp_cert)
                         has_ocsp_signing = True
@@ -552,15 +546,11 @@ def validate_crl_signature(crl: x509.CertificateRevocationList, issuer_cert: x50
             
             # Check Authority Key Identifier
             try:
-                aki_ext = crl.extensions.get_extension_for_oid(
-                    x509.oid.ExtensionOID.AUTHORITY_KEY_IDENTIFIER
-                )
+                aki_ext = crl.extensions.get_extension_for_oid(ExtensionOID.AUTHORITY_KEY_IDENTIFIER)
                 crl_aki = aki_ext.value.key_identifier
                 
                 try:
-                    issuer_ski_ext = issuer_cert.extensions.get_extension_for_oid(
-                        x509.oid.ExtensionOID.SUBJECT_KEY_IDENTIFIER
-                    )
+                    issuer_ski_ext = issuer_cert.extensions.get_extension_for_oid(ExtensionOID.SUBJECT_KEY_IDENTIFIER)
                     issuer_ski = issuer_ski_ext.value.key_identifier
                     
                     if crl_aki != issuer_ski:

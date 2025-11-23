@@ -5,18 +5,16 @@ import dns.rcode
 import dns.message
 import dns.query
 import dns.rdatatype
-#import dns.rdtypes
-#from dns.rdtypes.IN import TLSA
 import hashlib
 import logging
-from CertGuardConfig import Config
+from certguard_config import Config
 from cryptography import x509
-from cryptography.hazmat.primitives import serialization #, hashes
+from cryptography.hazmat.primitives import serialization
 from enum import IntEnum
 from helper_functions import get_ede_description, chain_terminates_in_root
-from chain_builder import verify_signature
-from mitmproxy import connection #tls, http, certs
-from typing import Sequence, Optional, Tuple
+#from chain_builder import verify_signature
+from mitmproxy import connection 
+from typing import Optional, Tuple
 
 CONFIG = Config()
 
@@ -62,7 +60,8 @@ class DANETLSAValidator:
         except Exception as e:
             logging.error(f"Error during DANE validation for {hostname}: {e}")
         
-        self.dane_used = False
+        self.dane_used = True
+        self.dane_validated = False
         self.dnssec_failure = False
         self.dane_failure = False
         self.violation = None
@@ -73,7 +72,7 @@ class DANETLSAValidator:
             self.stats["no_tlsa"] += 1
             logging.debug(f"DANE not in use for {hostname}.  {validation_error if validation_error else ""}")
         elif result == "dane_valid":
-            self.dane_used = True
+            self.dane_validated = True
             self.stats["validated"] += 1
             logging.info(f"DANE validation successful for {hostname}")
         elif result == "dns_failed":
@@ -98,7 +97,7 @@ class DANETLSAValidator:
             logging.error('Unexpected condition; failing closed')
             self.violation = f"⛔ Unepxected error encountered during DANE checks.{f'<br>&emsp;&emsp;▶ ' + ", ".join(validation_error) if validation_error else ''}"
     
-    def validate_dane(self, hostname: str, port: int, chain: list[x509.Certificate]) -> str:
+    def validate_dane(self, hostname: str, port: int, chain: list[x509.Certificate]) -> Tuple[str, Optional[str]]:
         """
         Validate certificate against TLSA records.
         Args:
@@ -112,11 +111,11 @@ class DANETLSAValidator:
             "no_tlsa":       No TLSA record found
             "dns_failed":    Error encountered during DNS query
             "dnssec_failed": DNSSEC validation failed
+            errors:          Extended DNS errors, DANE validation error, or None
         """
         #TODO: Move resolver logic for both dane.py and CertGuard.py checks into helper_functions.py.
         #TODO: Add support for DoH/DoQ to allow for safe use of public resolvers.
         logging.warning(f"-----------------------------------Entering validate_dane()---------------------------------------")
-        
 
         # Check cache
         cache_key = (hostname, port)

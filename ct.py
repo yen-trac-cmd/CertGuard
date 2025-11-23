@@ -2,7 +2,7 @@ import base64
 import datetime
 import hashlib
 import json
-import logging  
+import logging
 import os
 import requests
 import sys
@@ -47,7 +47,7 @@ class RevocationReason(IntEnum):
     def _missing_(cls, value: int):
         return cls.unknown
 
-def load_log_list() -> dict:
+def load_log_list(old_ct_log: json = None) -> dict:
     """
     Loads Google's well-known CT log list and transforms it into a dictionary of CT log entry metadata, keyed by log_id_bytes.
 
@@ -80,13 +80,14 @@ def load_log_list() -> dict:
 
     log_lists = [ct_log_list.json()]
 
-    if os.path.exists("./resources/legacy_log.json"):
-        try:
-            with open("./resources/legacy_log.json", "r", encoding="utf-8") as f:
-                old_log = json.load(f)
-                log_lists.append(old_log)
-        except Exception as e:
-            logging.error(f"Failed to load legacy CT log list: {e}")
+    if old_ct_log:
+        if os.path.exists(old_ct_log):
+            try:
+                with open(old_ct_log, "r", encoding="utf-8") as f:
+                    old_log = json.load(f)
+                    log_lists.append(old_log)
+            except Exception as e:
+                logging.error(f"Failed to load legacy CT log list: {e}")
 
     # Transform log_list mapping
     mapping = {}

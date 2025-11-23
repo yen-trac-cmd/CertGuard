@@ -1,16 +1,106 @@
+import certifi
 import hashlib
 import logging
+import os
+import sqlite3
 import sys
 from cryptography import x509
 from cryptography.x509.oid import ExtensionOID
-#from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 #from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519, ed448, dsa, padding
+from datetime import datetime, timedelta, timezone
 from enum import Enum
-from mitmproxy import certs
+from mitmproxy import certs, http
 from requests_cache import CachedSession, timedelta
 from typing import Sequence
+from urllib.parse import urlparse
+
+def is_navigation_request(flow: http.HTTPFlow, referer_header, accept_header) -> bool:
+    logging.debug(f"----------------------------------Entering is_navigation_request()-------------------------------")
+    method = flow.request.method.upper()
+    
+    # Only consider GET/POST requests that want HTML
+    if method not in ("GET", "POST"):
+        logging.info(f"Method not GET or POST; returning False.")
+        return False
+
+    # Heuristic 1: Initial navigation 
+    if not referer_header:   # No Referer = likely main navigation (or privacy browser extension that strips it out)
+        logging.info(f"No referer header found; assuming new navigation.")
+        return True
+
+    # Heuristic 2: Cross-origin navigation
+    referer_hostname = urlparse(referer_header).hostname
+    logging.debug(f"Hostname from referer_header:   {referer_hostname}")
+    #logging.debug(f"From flow.request.pretty_host:  {flow.request.pretty_host}")
+    logging.debug(f"Hostname from flow.request:     {flow.request.host}")
+    if (referer_hostname != flow.request.pretty_host) and "text/html" in accept_header:
+        logging.info(f"Hostname from referer_header ({urlparse(referer_header).hostname} doesn't match flow host ({flow.request.pretty_host}),")
+        logging.info(f"but request accepts HTML responses, so assuming cross-origin browser navigation.")
+        return True
+
+    # Heuristic 3: Fetch destination
+    dest = flow.request.headers.get("sec-fetch-dest", None)
+    if dest == "document":
+        logging.info("sec-fetch-dest header has destination of 'document'; assuming browser navigation & returning True.")
+        return True
+
+    # Heuristic 4: Accept header
+    accept = flow.request.headers.get("accept", "")
+    if "text/html" in accept:
+        logging.info("Found 'text/html' in Accept: header; returning True.")
+        return True
+    
+    logging.info(f"Could not ascertain new browser navigation; returning False.")
+    return False
+
+def get_root_store(custom_roots_dir) -> list[x509.Certificate]:
+    """
+    Loads trusted root certificates from local certifi store, along with any defined custom roots.
+
+    Args:
+        None
+    
+    Returns:
+        roots (list): List of cryptography.x509.Certificate objects for each root certificate enumerated.
+    """
+    if not os.path.exists(certifi.where()):
+        logging.critical(f"FATAL Error: Cannot locate certifi store at {certifi.where()}. Try updating the 'certifi' package for your OS!")
+        sys.exit()
+    else:
+        logging.info(f'Using certifi package located at {certifi.where()} as base root CA store.')
+    
+    with open(certifi.where(), "rb") as f:
+        root_bundle = f.read()
+        base_count = root_bundle.count(b'END CERTIFICATE')
+        logging.debug(f'Loaded {base_count} certificates from {certifi.where()}.')
+
+    # Load custom root CA certs
+    if custom_roots_dir != None:
+        from glob import glob
+        if os.path.isdir(custom_roots_dir):
+            pem_files = glob(os.path.join(custom_roots_dir, '*.pem'))
+            logging.info(f'Loading {len(pem_files)} custom root files from {custom_roots_dir}.')
+            for file in pem_files:
+                with open(file, "rb") as f:
+                    root_bundle += f.read()
+        else:
+            logging.critical(f"Could not find directory specified for 'custom_roots_dir': {custom_roots_dir}.")
+            logging.critical(f"Please check configuration in config.toml file or create/populate custom roots directory.")
+
+    roots: list[x509.Certificate] = []
+    for pem_block in root_bundle.split(b"-----END CERTIFICATE-----"):
+        pem_block = pem_block.strip()
+        if pem_block:
+            pem_block += b"\n-----END CERTIFICATE-----\n"
+            try:
+                roots.append(x509.load_pem_x509_certificate(pem_block, default_backend()))
+            except Exception:
+                pass
+    logging.info(f'Total root certificates loaded: {len(roots)}')
+    return roots
 
 def supported_ciphers_list() -> list[str]:
     """
@@ -23,7 +113,7 @@ def supported_ciphers_list() -> list[str]:
 
 def load_public_suffix_list() -> list[str]:  
     """
-    Loads Public Suffix List from https://publicsuffix.org/list/public_suffix_list.dat.
+    Loads the Public Suffix List maintained by Mozilla from https://publicsuffix.org/list/public_suffix_list.dat.
     """
     PSL_URL = 'https://publicsuffix.org/list/public_suffix_list.dat'
     public_suffix_list = []
@@ -213,7 +303,7 @@ def clean_error(html_string: str) -> str:
     from lxml.html import fromstring
     import re
 
-    cz_to_replace = r"🛈|ℹ️|⛔|⚠️|&nbsp;|&emsp;|▶"
+    cz_to_replace = r"🛈|ℹ️|✅|⛔|⚠️|▶|&nbsp;|&emsp;"
     
     error_text = re.sub(cz_to_replace, '', html_string).strip()
     tree = fromstring(error_text)
@@ -221,3 +311,8 @@ def clean_error(html_string: str) -> str:
     
     return clean_error_text
 
+def record_decision(db_path, host, decision, root_fingerprint) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("REPLACE INTO decisions (host, decision, root, timestamp) VALUES (?, ?, ?, ?)", (host, decision, root_fingerprint, now))
+        conn.commit()

@@ -82,7 +82,7 @@ def root_country_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) 
         logging.warning(f'{ca_type} CA is located in: {config.iso_country_map[ca_country]}')
         return ErrorLevel.CRIT, violation
             
-    return ErrorLevel.NONE, None
+    return ErrorLevel.NONE, f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;Root CA Country: {config.iso_country_map[ca_country]}'
 
 def controlled_CA_checks(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> tuple["ErrorLevel", Optional[str]]:
     """
@@ -531,8 +531,8 @@ def caa_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> tuple[
 
     if return_violations:
         return ErrorLevel.WARN, f'{"<br>".join(return_violations)}' 
-
-    return ErrorLevel.NONE, None    
+    else:
+        return ErrorLevel.NONE, f'✅ CAA records successfuly validated.'
 
 def test_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Tuple[ErrorLevel, Optional[str]]:
     # Modified example rule from mitmproxy documentation
@@ -568,3 +568,11 @@ def dane_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Tuple
             return ErrorLevel.FATAL, f'{dane_validator.violation}'
         else:
             return ErrorLevel.CRIT, f'{dane_validator.violation}'
+
+def dnssec_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Optional[str]:
+    logging.warning(f"-----------------------------------Entering dnssec_check()----------------------------------------")
+    if dane_validator.authenticated_data:
+        logging.info('DNSSEC is enabled for zone.')
+        return ErrorLevel.NONE, f'✅ The DNS zone is DNSSEC-signed and has a valid chain of trust.'
+    else:
+        return ErrorLevel.NONE, None

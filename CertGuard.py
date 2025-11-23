@@ -1,5 +1,6 @@
 from certguard_checks import (
-    dane_check, 
+    dane_check,
+    dnssec_check,
     root_country_check, 
     controlled_CA_checks, 
     expiry_check, 
@@ -262,6 +263,7 @@ def request(flow: http.HTTPFlow) -> None:
 
     my_checks = [
         dane_check,
+        dnssec_check,
         root_country_check,     # Optional for mass scanning
         controlled_CA_checks,   # Optional for mass scanning
         expiry_check, 

@@ -16,7 +16,7 @@ from helper_functions import get_ede_description, chain_terminates_in_root
 from mitmproxy import connection 
 from typing import Optional, Tuple
 
-CONFIG = Config()
+config = Config()
 
 class TLSA_Enum:
     """
@@ -85,7 +85,7 @@ class DANETLSAValidator:
             self.dnssec_failure = True
             self.stats["dnssec_failed"] += 1
             logging.warning(f"DNSSEC validation failed for {hostname}")
-            if CONFIG.require_dnssec:
+            if config.require_dnssec:
                 logging.error(f"DNSSEC validation failed for DANE TLSA record {hostname}.")
                 self.violation = f"⛔ DNSSEC validation failed for DANE TLSA record. {f'<br>&emsp;&emsp;▶ DNS Error: ' + ", ".join(validation_error) if validation_error else ''}"
         elif result == "dane_failed":
@@ -123,6 +123,7 @@ class DANETLSAValidator:
         
         if cache_key in self.cache:
             tlsa_records = self.cache[cache_key]
+            self.authenticated_data = True
             logging.debug(f'Found TLSA record(s) in session cache: {tlsa_records}')
         else:
             # Query for TLSA records
@@ -134,19 +135,19 @@ class DANETLSAValidator:
 
             while got_response == False:
                 try:
-                    current_resolver = CONFIG.resolvers[0]
+                    current_resolver = config.resolvers[0]
                     logging.debug(f'Using resolver: {current_resolver}')
-                    response = dns.query.udp_with_fallback(query, current_resolver, timeout=CONFIG.dns_timeout)
+                    response = dns.query.udp_with_fallback(query, current_resolver, timeout=config.dns_timeout)
                     got_response = True
                 except dns.exception.Timeout:
-                    CONFIG.resolvers.rotate(1)
-                    current_resolver = CONFIG.resolvers[0]
-                    logging.error(f'DNS query for "{tlsa_name}" using resolver {CONFIG.resolvers[-1]} exceeded timeout of {CONFIG.dns_timeout} seconds.')
+                    config.resolvers.rotate(1)
+                    current_resolver = config.resolvers[0]
+                    logging.error(f'DNS query for "{tlsa_name}" using resolver {config.resolvers[-1]} exceeded timeout of {config.dns_timeout} seconds.')
                     logging.error(f'  --> Trying again with resolver {current_resolver}.')
                 except Exception as e:
-                    CONFIG.resolvers.rotate(1)
-                    current_resolver = CONFIG.resolvers[0]
-                    logging.debug(f"Exception encountered for DNS query using resolver {CONFIG.resolvers[-1]}: {e}")
+                    config.resolvers.rotate(1)
+                    current_resolver = config.resolvers[0]
+                    logging.debug(f"Exception encountered for DNS query using resolver {config.resolvers[-1]}: {e}")
                     logging.error(f'  --> Trying again with resolver {current_resolver}.')
 
             if response[1]:
@@ -156,10 +157,10 @@ class DANETLSAValidator:
 
             # Check DNSSEC validation 
             if self.verify_dnssec(response):
-                authenticated_data = True
+                self.authenticated_data = True
                 logging.info(f'DNSSEEC response validation successful (Authenticated Data bit set in response).')
             else:
-                authenticated_data = False
+                self.authenticated_data = False
                 logging.warning(f'Response data could not be validated by DNSSEC.')
 
             ede_errors=[]
@@ -201,7 +202,7 @@ class DANETLSAValidator:
                 logging.warning(f'No TLSA records identified.')
                 return "no_tlsa", ede_errors
 
-            if not authenticated_data:
+            if not self.authenticated_data:
                 return "dnssec_failed", ede_errors
 
             # Cache for future queries against same FQDN

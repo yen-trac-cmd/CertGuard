@@ -11,11 +11,13 @@ from certguard_checks import (
     sct_check, 
     ct_quick_check, 
     caa_check, 
+    x509_version_check,
     test_check
 )
 from certguard_checks import dane_validator
-from certguard_config import BYPASS_PARAM, Config, ErrorLevel, Logger
+from certguard_config import BYPASS_PARAM, Config, DisplayLevel, ErrorLevel, Finding, Logger
 from chain_builder import get_root_cert, normalize_chain
+from cryptography.x509 import NameOID
 from cryptography.hazmat.primitives import hashes
 from error_screen import error_screen
 from helper_functions import clean_error, get_cert_domains, get_root_store, is_navigation_request, record_decision, supported_ciphers_list
@@ -100,7 +102,7 @@ def load(loader: addonmanager.Loader) -> None:
     logging.warning(f"===> Reloaded CertGuard Addon")
 
 def request(flow: http.HTTPFlow) -> None:
-    violations=[]
+    findings:list[Finding]=[]
     highest_error_level = ErrorLevel.NONE.value
     host = flow.request.pretty_host
     headers = flow.request.headers
@@ -134,8 +136,9 @@ def request(flow: http.HTTPFlow) -> None:
                     del ocsp_addon.stapled_sct[conn_id]
                     
                     # Return during hunt for any website using stapled SCTs in OCSP response.
-                    violation = f'Found SCT in stapled OCSP response for <b>{flow.request.pretty_url}!!</b>.'
-                    return ErrorLevel.INFO, violation
+                    finding = f'Found SCT in stapled OCSP response for <b>{flow.request.pretty_url}!!</b>.'
+                    findings.append(Finding(DisplayLevel.WARNING, finding))
+                    #error_screen(config, flow, None, ErrorLevel.FATAL.color, [finding], ErrorLevel.FATAL.value)
 
                     # TODO: If ever encounter real-life SCT in stapled OCSP response, pass into Certificate Transparency 
                     # module ("ct") for signature validation & inclusion proofing.
@@ -160,42 +163,50 @@ def request(flow: http.HTTPFlow) -> None:
 
     # Convert certificate chain to a properly-ordered, de-duplicated list of cryptography.x509.Certificate objects  
     # This step is necessary to compensate for the (many!) misconfigured servers encountered on the Internet
-    cert_chain = normalize_chain([cert.to_cryptography() for cert in cert_chain])
+    cert_chain, errors = normalize_chain([cert.to_cryptography() for cert in cert_chain])
+    if errors:
+        highest_error_level = ErrorLevel.ERROR.value
+        findings.append(Finding(DisplayLevel.WARNING, errors))
     
     # Retrieve validated root cert as cryptography.hazmat.bindings._rust.x509.Certificate object.
     root_cert, claimed_root, verification_error, self_signed = get_root_cert(cert_chain, root_store)
     if root_cert:
         root_hash = root_cert.fingerprint(hashes.SHA256()).hex()
         # Add root cert to chain (if not already present) for a complete / validated chain
-        if not cert_chain[-1].subject == cert_chain[-1].issuer:
+        if cert_chain[-1].subject == cert_chain[-1].issuer:
+            highest_error_level = ErrorLevel.ERROR.value
+            findings.append(Finding(DisplayLevel.WARNING, f'⚠️ Root certificate present in server-supplied cert chain.'))
+        else:
             cert_chain.append(root_cert)
+        
+        # Fetch org name for verbose block pages        
+        for attr in root_cert.subject.get_attributes_for_oid(NameOID.ORGANIZATION_NAME):
+            ca_org = attr.value
+        findings.append(Finding(DisplayLevel.VERBOSE, f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;Root CA Operator: {ca_org}'))
+
     elif self_signed:
         #TODO: Add logic for DANE usage type 3, where cert may be self-attested in TLSA record.
-        violations.append(f'⚠️ Encountered self-signed certificate:<br>&emsp;&emsp;<b>{self_signed.subject.rfc4514_string()}</b>')
+        findings.append(Finding(DisplayLevel.WARNING, f'⚠️ Encountered self-signed certificate:<br>&emsp;&emsp;<b>{self_signed.subject.rfc4514_string()}</b>'))
         highest_error_level = ErrorLevel.ERROR.value
         blockpage_color = ErrorLevel.ERROR.color
         root_hash = self_signed.fingerprint(hashes.SHA256()).hex()
     elif claimed_root:
-        # Note: As currently constructed, this error cannot be anything less than FATAL since the 'Proceed Anyway' button won't work.
         #TODO: Add logic for DANE usage type 2, where root may be a private CA.
         logging.error(f'Could not validate cert against claimed Issuer cert of: ({claimed_root}).')
-        violations.append(f'⛔ Could not validate cert against claimed Issuer cert of:<br>&emsp;&emsp;<b>{claimed_root}</b>')
+        findings.append(Finding(DisplayLevel.CRITICAL, f'⛔ Could not validate cert against claimed Issuer cert of:<br>&emsp;&emsp;<b>{claimed_root}</b>'))
         if len(cert_chain) == 1:
             logging.error(f'Server failed to send complete certificate chain.')
-            violations.append('&emsp;&emsp;▶ Server failed to send complete certificate chain.')
-        #error_screen(config, flow, None, ErrorLevel.FATAL.color, [violation], ErrorLevel.FATAL.value)
+            findings.append(Finding(DisplayLevel.WARNING, '&emsp;&emsp;▶ Server failed to send complete certificate chain.'))
         highest_error_level = ErrorLevel.FATAL.value
         blockpage_color = ErrorLevel.FATAL.color
         root_hash = f"Unidentified_root - {claimed_root}"
-        #return
+
     if verification_error:
         logging.error(f'Encountered verification error while building certificate chain: {verification_error}')
-        violations.append(f'⛔ Could not verify certificate chain: {verification_error}')
+        findings.append(Finding(DisplayLevel.CRITICAL, f'⛔ Could not verify certificate chain: {verification_error}'))
         highest_error_level = ErrorLevel.FATAL.value
         blockpage_color = ErrorLevel.FATAL.color
         root_hash = "Unverified root"
-        #error_screen(config, flow, None, ErrorLevel.FATAL.color, [violation], ErrorLevel.FATAL.value)
-        #return
 
     # Check to see if site is already approved in the database.
     prior_approval = prior_approval_check(flow, cert_chain, quick_check=True)
@@ -263,7 +274,6 @@ def request(flow: http.HTTPFlow) -> None:
 
     my_checks = [
         dane_check,
-        dnssec_check,
         root_country_check,     # Optional for mass scanning
         controlled_CA_checks,   # Optional for mass scanning
         expiry_check, 
@@ -272,29 +282,35 @@ def request(flow: http.HTTPFlow) -> None:
         critical_ext_check,
         prior_approval_check,   # Optional for mass scanning
         sct_check, 
-        ct_quick_check,         # Can use this or the sct_check() and revocation_checks() for more thorough (albeit slower) validation.
+        #ct_quick_check,         # Can use this or the sct_check() and revocation_checks() for more thorough (albeit slower) validation.
         caa_check,
         test_check,
+        x509_version_check,
+        dnssec_check,
     ] 
 
     for check in my_checks:
-        error, violation = check(flow, cert_chain)
+        error, finding = check(flow, cert_chain)
         if error.value > highest_error_level:
             highest_error_level = error.value
             blockpage_color = error.color
-        violations.append(violation)
+        if finding:    
+            findings.append(finding)
+    
+    findings.sort(key=lambda f: f.level)
+    filtered_findings = [f.message for f in findings if f.level <= config.bp_verbosity]
 
     logging.info(f'-----------------------------------END verification for {host}--------------------------------------------')
     
-    cleaned_errors = [clean_error(v) for v in violations if v]
-    flow.metadata["CertGuard_violations"] =  cleaned_errors if cleaned_errors else None
-    flow.metadata["Highest_Errorlevel"] =    highest_error_level
+    cleaned_errors = [clean_error(f) for f in filtered_findings]
+    flow.metadata["CertGuard_findings"] = cleaned_errors if cleaned_errors else None
+    flow.metadata["Highest_Errorlevel"] = highest_error_level
     if is_main_page:
         flow.metadata["Is_Main_Page"] = True
 
     logging.warning(f"----> The highest_error_level value is: {highest_error_level}.")
     if highest_error_level > ErrorLevel.NONE.value:
-        error_screen(config, flow, token, blockpage_color, violations, highest_error_level)
+        error_screen(config, flow, token, blockpage_color, filtered_findings, highest_error_level)
         record_decision(config.db_path, host, "blocked", root_hash)
         logging.error(f"Request to {host} blocked; Token={token}")
     else:
@@ -307,13 +323,13 @@ def request(flow: http.HTTPFlow) -> None:
 def response(flow: http.HTTPFlow) -> None:
     if flow.metadata.get("Is_Main_Page"):
         highest_error_level = flow.metadata.get("Highest_Errorlevel", 0)
-        violations = flow.metadata.get("CertGuard_violations")
+        findings = flow.metadata.get("CertGuard_findings")
 
         log_entry = {
             "Response Code": flow.response.status_code, 
             "FQDN": flow.request.pretty_host, 
             "ErrorLevel": highest_error_level, 
-            "Violations": violations
+            "Findings": findings
         }
         
         json_string = json.dumps(log_entry)

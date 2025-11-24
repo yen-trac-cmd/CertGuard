@@ -5,7 +5,8 @@ import logging
 import tomllib
 import logging
 from collections import deque
-from enum import Enum
+from dataclasses import dataclass
+from enum import Enum, IntEnum
 from logging.handlers import RotatingFileHandler
 
 BYPASS_PARAM = "CertGuard-Token"
@@ -35,12 +36,23 @@ class ErrorLevel(Enum):
             case self.FATAL:
                 return 'Maroon'
 
+class DisplayLevel(IntEnum):
+    CRITICAL = -1     # Critical errors that cannot be bypassed
+    WARNING  = 0      # Warnings that trigger CertGuard's blockpage
+    POSITIVE = 1      # Noteworthy positive finding
+    VERBOSE  = 2      # Informational findings
+
+@dataclass
+class Finding:
+    level: DisplayLevel
+    message: str
+
 class Config:
     def __init__(self) -> None:
         with open("config.toml", "rb") as f:
             cfg = tomllib.load(f)
 
-        self.logging_level     = cfg["general"]["logging_level"].lower()             # "debug", "info", "warn", "error", or "alert"
+        self.logging_level     = cfg["general"]["console_logging_level"].lower()             # "debug", "info", "warn", "error", or "alert"
         self.user_resolvers    = cfg["general"]["resolvers"]
         self.dns_timeout       = cfg["general"]["dns_timeout"]
         self.db_path           = cfg["general"]["db_path"]
@@ -61,10 +73,11 @@ class Config:
         self.blocklist         = [country.upper() for country in cfg["country_filtering"]["blocklist"]]
 
         # Optional params
-        self.custom_roots_dir = cfg["general"].get("custom_roots_dir", None)
-        self.min_tls_version  = cfg.get("tls_config", {}).get("min_tls_version", 1.2)
-        ciphersuite_val = cfg.get("tls_config", {}).get("ciphersuites", None)
-        self.ciphersuites = ciphersuite_val.upper() if ciphersuite_val is not None else None
+        self.custom_roots_dir  = cfg["general"].get("custom_roots_dir", None)
+        self.bp_verbosity      = cfg["general"].get("blockpage_verbosity", 0)        
+        self.min_tls_version   = cfg.get("tls_config", {}).get("min_tls_version", 1.2)
+        ciphersuite_val        = cfg.get("tls_config", {}).get("ciphersuites", None)
+        self.ciphersuites      = ciphersuite_val.upper() if ciphersuite_val is not None else None
 
         # ISO country map
         with open('./resources/iso-3166-alpha2_list.json') as iso_countries:
@@ -89,6 +102,9 @@ class Config:
             unrecognized = [entry for entry in entries if entry not in self.iso_country_map]
             assert not unrecognized, f"Unrecognized country specified in config.toml: {unrecognized}!"
         
+        if self.bp_verbosity not in [0,1,2]:
+            raise AssertionError("The 'blockpage_verbosity' setting in config.toml only supports integer values between 0-2.  Please correct.")
+
         # DNS resolver setup
         self.resolver = dns.resolver.Resolver()
         for ip in self.user_resolvers:

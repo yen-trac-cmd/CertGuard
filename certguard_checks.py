@@ -1,7 +1,8 @@
+from csv import Error
 from ca_org_mapping import ca_org_to_caa
 from ca_org_mapping import ca_org_to_country
 from caa_record_checker import check_caa_per_domain
-from certguard_config import Config, ErrorLevel
+from certguard_config import Config, DisplayLevel, ErrorLevel, Finding
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from dane import DANETLSAValidator
@@ -64,25 +65,25 @@ def root_country_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) 
         else:
             logging.warning(f"No Country value found in {ca_type} CA cert: {ca_cert.rfc4514_string()}")  # 
             violation = f'ℹ️ No Country (C=) value found in {ca_type} CA cert: <br>&emsp;&emsp;<b>{ca_cert.rfc4514_string()}</b>'
-            return ErrorLevel.NOTICE, violation
+            return ErrorLevel.NOTICE, Finding(DisplayLevel.VERBOSE, violation)
     elif len(ca_country) > 1:
         logging.critical(f"Multiple Country values found in {ca_type} CA cert: {ca_cert.rfc4514_string()}")
         violation = f"⛔ Multiple Country (C=) values found in {ca_type} CA cert: <b>{ca_cert.rfc4514_string()}</b>"
-        return ErrorLevel.FATAL, violation  
+        return ErrorLevel.FATAL, Finding(DisplayLevel.CRITICAL, violation)
 
     logging.info(f"Country attribute for {ca_type} CA: {ca_country} ")
 
     if ca_country in config.blocklist:
         violation = f"⛔ {ca_type} CA is located in a <b style='color:red;'>blocklisted</b> country: <b>{config.iso_country_map[ca_country]}</b>"
         logging.error(f'{ca_type} CA for {flow.request.pretty_url} is located in a blocklisted country: {config.iso_country_map[ca_country]}')
-        return ErrorLevel.FATAL, violation
+        return ErrorLevel.FATAL, Finding(DisplayLevel.CRITICAL, violation)
 
     if (config.filtering_mode == 'allow' and ca_country not in config.country_list) or (config.filtering_mode == 'warn' and ca_country in config.country_list):
         violation = f"⚠️ {ca_type} CA is located in <strong>{config.iso_country_map[ca_country]}</strong>."
         logging.warning(f'{ca_type} CA is located in: {config.iso_country_map[ca_country]}')
-        return ErrorLevel.CRIT, violation
+        return ErrorLevel.CRIT, Finding(DisplayLevel.WARNING, violation)
             
-    return ErrorLevel.NONE, f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;Root CA Country: {config.iso_country_map[ca_country]}'
+    return ErrorLevel.NONE, Finding(DisplayLevel.VERBOSE, f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;Country for CA: {config.iso_country_map[ca_country]}')
 
 def controlled_CA_checks(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> tuple["ErrorLevel", Optional[str]]:
     """
@@ -124,11 +125,11 @@ def controlled_CA_checks(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]
     if prohibited_value:
         violation = f"⛔ Prohibited Root CA detected: <b>{list(prohibited_value)[0]}</b>"
         logging.critical(f'Prohibited Root CA detected: {list(prohibited_value)[0]}')
-        return ErrorLevel.FATAL, violation
+        return ErrorLevel.FATAL, Finding(DisplayLevel.CRITICAL, violation)
     elif restricted_value:
         violation = f"⚠️ Restricted Root CA detected: <b>{list(restricted_value)[0]}</b>"
         logging.critical(f"Restricted Root CA detected: '{list(restricted_value)[0]}', issued by {root_org[0].value}.")
-        return ErrorLevel.CRIT, violation
+        return ErrorLevel.CRIT, Finding(DisplayLevel.WARNING, violation)
     return ErrorLevel.NONE, None
 
 def expiry_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Tuple[ErrorLevel, Optional[str]]:
@@ -167,12 +168,14 @@ def expiry_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Tup
     ]
 
     error_message = f'⚠️ Expired certificate(s) identified:<br>{"<br>".join(violations)}'
-    return ErrorLevel.CRIT, error_message   
+    return ErrorLevel.CRIT, Finding(DisplayLevel.WARNING, error_message)
 
 def revocation_checks(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Tuple[ErrorLevel, Optional[str]]:
     """
     Facade function for performing revocation checking against certificates.
     """
+    findings = []
+
     if not config.revocation_checks:
         logging.warning("Skipping revocation checks per 'revocation_checks' configuration directive.")
         return ErrorLevel.NONE, None
@@ -182,17 +185,20 @@ def revocation_checks(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -
     if flow.metadata.get("ocsp_signature_valid") and flow.metadata.get("ocsp_cert_status") == "GOOD":
         # If stapled OCSP response attached to flow, skip_leaf argument to check_cert_chain_revocation() will skip revocation checking for leaf cert.
         skip_leaf = True
+        findings.append(f'✅ Clean OCSP report for leaf cert stapled to TLS session negotiation.')
 
     is_revoked, error = revocation_logic.check_cert_chain_revocation(cert_chain, skip_leaf)
+
     if is_revoked:
         logging.error(f'One or more certificates REVOKED!')
         violation = f"⛔ One or more certs in chain marked as REVOKED:{error}"
-        return ErrorLevel.FATAL, violation
+        return ErrorLevel.FATAL, Finding(DisplayLevel.CRITICAL, violation)
 
     if not error:
-        return ErrorLevel.NONE, None
+        findings.append(f'✅ CRL/OCSP revocation checks for all certs in chain came back clean.')
+        return ErrorLevel.NONE, Finding(DisplayLevel.POSITIVE, "<br>".join(findings))
 
-    return ErrorLevel.INFO, error
+    return ErrorLevel.NOTICE, Finding(DisplayLevel.WARNING, error)
 
 def identity_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Tuple[ErrorLevel, Optional[str]]:
     """Check if any certificate in the chain lacks a subject, or if the leaf cert lacks a SAN."""
@@ -245,12 +251,52 @@ def identity_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> T
                 violations.append(f'&emsp;&emsp;▶ {label} <code>{cn}</code> missing Subject Alternative Name (SAN).')
                 error_level = ErrorLevel.WARN
 
+    # Confirm FQDN(s) in leaf cert
+    fqdn = (flow.request.pretty_host).lower()
+    leaf = cert_chain[0]
+    
+    cert_domains = get_cert_domains(leaf)
+    if len(cert_domains) == 0:
+        logging.error(f'No FQDNs found in cert presented when connecting to {fqdn}.')
+        error_level = ErrorLevel.FATAL
+        violations.append(f'&emsp;&emsp;▶ Certificate for {fqdn} does not contain any FQDNs.')
+    
+    logging.debug(f'All domains from leaf cert: {cert_domains}')
+
+    # Build list of applicable FQDNs from cert to check against
+    check_domains=[]
+    if fqdn in cert_domains:
+        check_domains.append(fqdn)
+        
+    # Check to see if FQDN in URL is handled via wildcard entry in cert
+    fqdn_parts=fqdn.split(".")
+    if len(fqdn_parts) > 2:
+        base_domain = ".".join(fqdn_parts[1:])
+        logging.info(f' Base domain: {base_domain}')
+        if f'*.{base_domain}' in cert_domains:
+            check_domains.append(f'*.{base_domain}')
+
+    # Raise error if URL FQDN not present in list
+    if len(check_domains) == 0:
+        logging.error(f'Certificate not valid for FQDN of {fqdn}.')
+        error_level = ErrorLevel.CRIT
+        violations.append(f'&emsp;&emsp;▶ Certificate <a href=https://knowledge.digicert.com/solution/name-mismatch-in-web-browser target="_blank">name mismatch</a>; cert not valid for <code>{fqdn}</code>.')
+
+    # Write FQDN list to flow metadata for use by other functions
+    flow.metadata["cert_domains"] = check_domains    
+
     if not violations:
         logging.debug('Cert identity checks completed successfully.')
         return ErrorLevel.NONE, None
 
-    error_message = f'⚠️ Identity issue(s) found in certificate chain:<br>{"<br>".join(violations)}'
-    return error_level, error_message
+    if error_level == ErrorLevel.FATAL:
+        error_message = f'⛔ Critical identity issue(s) found in certificate chain:<br>{"<br>".join(violations)}'
+        dp_level = DisplayLevel.CRITICAL
+    else:
+        error_message = f'⚠️ Identity issue(s) found in certificate chain:<br>{"<br>".join(violations)}'
+        dp_level = DisplayLevel.WARNING
+    
+    return error_level, Finding(dp_level, error_message)
 
 def critical_ext_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Tuple[ErrorLevel, Optional[str]]:
     """
@@ -271,7 +317,7 @@ def critical_ext_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) 
     if unrecognized:
         error = f"⛔ Unknown critical X.509 extension(s) found in cert chain:"
         violation = error + "".join(unknowns)
-        return ErrorLevel.FATAL, violation
+        return ErrorLevel.FATAL, Finding(DisplayLevel.CRITICAL, violation)
     else:
         logging.debug("No unrecognized x.509 extensions marked as 'Critical' found.")
         return ErrorLevel.NONE, None
@@ -308,7 +354,7 @@ def prior_approval_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]
 
     root_fingerprint = cert_chain[-1].fingerprint(hashes.SHA256()).hex()
     
-    ############ Need to extend this to examine root cert parameters!!!!!!!!!!
+    # TODO: Extend this to examine additional root cert parameters.
     with sqlite3.connect(config.db_path) as conn:
         row = conn.execute("SELECT decision, root FROM decisions WHERE host = ?", (host,)).fetchone()               
         
@@ -327,7 +373,7 @@ def prior_approval_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]
             if row and row[0] == "approved" and row[1] != root_fingerprint:
                 logging.info(f"Root CA for {host} inconsistent with previously observed!")   
                 violation = f"⚠️ Root CA for <b>{host}</b> inconsistent with previously observed!"
-                return ErrorLevel.CRIT, violation
+                return ErrorLevel.CRIT, Finding(DisplayLevel.WARNING, violation)
             logging.info(f"No mismatched root CA records found for {host} in database.")   
         return ErrorLevel.NONE, None   # Assumes no row returned, or consistent root_fingerprint 
 
@@ -354,7 +400,7 @@ def sct_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Tuple[
         # alternative SCT delivery methods are exceedingly rare, this check should not result in FATAL errors until those methods are added.
         logging.error(f"Cert for {flow.request.pretty_url} missing SCT(s)!")
         violation = '⚠️ Certificate missing <a href=https://certificate.transparency.dev/howctworks/ target="_blank">Signed Certificate Timestamps</a> (SCTs)'
-        return ErrorLevel.ERROR, violation
+        return ErrorLevel.ERROR, Finding(DisplayLevel.WARNING, violation)
     
     # Print out SCT details for debugging purposes
     for i, sct in enumerate(scts, 1):
@@ -386,12 +432,11 @@ def sct_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Tuple[
                 warnings.append(f'⚠️ {error}')
 
     if violations:
-        return ErrorLevel.FATAL, f'{"<br>".join(violations)}' 
-    
-    if warnings:
-        return ErrorLevel.ERROR, f'{"<br>".join(warnings)}'
-
-    return ErrorLevel.NONE, None
+        return ErrorLevel.FATAL, Finding(DisplayLevel.CRITICAL, f'{"<br>".join(violations)}')
+    elif warnings:
+        return ErrorLevel.ERROR, Finding(DisplayLevel.WARNING, f'{"<br>".join(warnings)}')
+    else:
+        return ErrorLevel.NONE, Finding(DisplayLevel.POSITIVE, f'✅ SCT signatures valid; inclusion verified for {len(scts)} CT logs.')
 
 def ct_quick_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Tuple[ErrorLevel, Optional[str]]:
     """
@@ -417,7 +462,7 @@ def ct_quick_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> T
 
         if error:
             logging.error(f'Could not check SSLMate for Certificate Transparency inclusion: {error}.')
-            return ErrorLevel.ERROR, f'{error}'
+            return ErrorLevel.ERROR, Finding(DisplayLevel.WARNING, f'{error}')
 
         if found:
             logging.info(f'Publication in Certificate Transparency log confirmed.')
@@ -427,7 +472,7 @@ def ct_quick_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> T
             
             if now - timedelta(hours=24) < not_before <= now:
                 logging.info('Cert is within Maximum Merge Delay (MMD) window for publishing to Certificate Transparency log.')
-                return ErrorLevel.INFO, f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;Cert not found in CT logs, but within 24hr <a href=https://datatracker.ietf.org/doc/html/rfc6962#section-3 target="_blank">Maximum Merge Delay</a> period.'
+                return ErrorLevel.INFO, Finding(DisplayLevel.VERBOSE, f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;Cert not found in CT logs, but within 24hr <a href=https://datatracker.ietf.org/doc/html/rfc6962#section-3 target="_blank">Maximum Merge Delay</a> period.')
 
             elif not_before > now:
                 logging.info("Certificate is not valid yet (Not Before timestamp is in the future)!")
@@ -445,9 +490,9 @@ def ct_quick_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> T
             violations.append(f'⛔ Certificate marked as revoked at {revoked}')
         
         if violations:
-            return ErrorLevel.FATAL, f'{"<br>".join(violations)}' 
+            return ErrorLevel.FATAL, Finding(DisplayLevel.CRITICAL, f'{"<br>".join(violations)}')
 
-        return ErrorLevel.NONE, None
+        return ErrorLevel.NONE, Finding(DisplayLevel.POSITIVE, f'✅ CT log inclusion checked via SSLMate and certificate not marked as revoked')
 
 def caa_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> tuple[ErrorLevel, Optional[str]]:
     """ 
@@ -473,40 +518,24 @@ def caa_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> tuple[
     
     if not orgs:
         logging.error(f'No Organization (O=) value identified for Issuing CA.  Bypassing curther CAA checks.')
-        return ErrorLevel.WARN, f'⚠️ No Organization (O=) value found for Issuing CA.'
+        return ErrorLevel.WARN, Finding(DisplayLevel.WARNING, f'⚠️ No Organization (O=) value found for Issuing CA.')
 
     if len(orgs) >= 2:
         logging.info(f' Multiple Orgs found in Issuing CA: {orgs}')
-        return ErrorLevel.FATAL, f'⛔ Multiple Organization values encountered inside Issuing CA cert! <b>{",".join(orgs)}</b>' 
+        return ErrorLevel.FATAL, Finding(DisplayLevel.CRITICAL, f'⛔ Multiple Organization values encountered inside Issuing CA cert! <b>{",".join(orgs)}</b>')
     
     ca_identifiers=ca_org_to_caa.get(org, ["UNKNOWN issue-domain-name identifier!  Please update 'ca_org_mapping.py' file"]) 
     logging.info(f' Matching CA identifiers: {ca_identifiers}')
 
-    # Gets all FQDNs in cert (CN + SANs).  We won't check against all, but this lets us check for wildcard entries.
-    cert_domains = get_cert_domains(x509_leaf)
-    if len(cert_domains) == 0:
-        logging.error(f'No FQDNs found in cert presented when connecting to {fqdn}.')
-        return ErrorLevel.FATAL, f'Certificate returned for {fqdn} does not contain any FQDNs!' 
-    logging.debug(f'All domains from leaf cert: {cert_domains}')
+    cert_domains = flow.metadata.get("cert_domains")
     
-    check_domains=[]
-    if fqdn in cert_domains:
-        check_domains.append(fqdn)
-        
-    # Check to see if FQDN in URL is handled via wildcard entry in cert
-    fqdn_parts=fqdn.split(".")
-    if len(fqdn_parts) > 2:
-        base_domain = ".".join(fqdn_parts[1:])
-        logging.info(f' base_domain: {base_domain}')
-        if f'*.{base_domain}' in cert_domains:
-            check_domains.append(f'*.{base_domain}')
+    # Silently exit if no FQDNs extracted from cert; let identity_check() handle related errors.
+    if not cert_domains:
+        return ErrorLevel.NONE, None
+    else:
+        check_domains = cert_domains
 
-    #TODO: Move this check to identity_check()
-    if len(check_domains) == 0:
-        logging.error(f'Certificate not valid for FQDN of {fqdn}.')
-        return ErrorLevel.CRIT, f'⚠️ Certificate <a href=https://knowledge.digicert.com/solution/name-mismatch-in-web-browser target="_blank">name mismatch</a>; cert not valid for <code>{fqdn}</code>.' 
-
-    logging.info(f' Checking CAA records for these domains = {check_domains}')
+    logging.info(f' Checking CAA records for domains {check_domains}')
 
     results = {}
     for domain in check_domains:
@@ -521,18 +550,18 @@ def caa_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> tuple[
             caa_violations.append(domain)
 
     if not records_found:
-        return ErrorLevel.NONE, f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;No published CAA records identified.'
+        return ErrorLevel.NONE, Finding(DisplayLevel.VERBOSE, f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;No published CAA records identified.')
 
     if caa_violations:
         return_violations.append(f'⚠️ FQDN(s) in cert not authorized by CAA record: <b>{",".join(caa_violations)}</b>')
     
     if other_errors:
-        return_violations.append(f'⚠️ Critical condition(s) encountered during <a href=https://en.wikipedia.org/wiki/DNS_Certification_Authority_Authorization target="_blank">CAA</a> verification:<br>    {other_errors}')
+        return_violations.append(f'⚠️ Issues encountered during <a href=https://en.wikipedia.org/wiki/DNS_Certification_Authority_Authorization target="_blank">CAA</a> verification:<br>    {other_errors}')
 
     if return_violations:
-        return ErrorLevel.WARN, f'{"<br>".join(return_violations)}' 
+        return ErrorLevel.WARN, Finding(DisplayLevel.WARNING, f'{"<br>".join(return_violations)}')
     else:
-        return ErrorLevel.NONE, f'✅ CAA records successfuly validated.'
+        return ErrorLevel.NONE, Finding(DisplayLevel.POSITIVE, f'✅ CAA records successfuly validated.')
 
 def test_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Tuple[ErrorLevel, Optional[str]]:
     # Modified example rule from mitmproxy documentation
@@ -540,7 +569,7 @@ def test_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Tuple
     if "https://www.example.com/path" in flow.request.pretty_url:
         logging.info("Triggered test_check().")
         violation = f'<span style="color: green;">&nbsp;🛈</span>&nbsp;&nbsp;Example URL accessed: <b>{flow.request.pretty_url}</b>.'
-        return ErrorLevel.INFO, violation
+        return ErrorLevel.INFO, Finding(DisplayLevel.WARNING, violation)
     return ErrorLevel.NONE, None
 
 def dane_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Tuple[ErrorLevel, Optional[str]]:
@@ -559,20 +588,50 @@ def dane_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Tuple
         return ErrorLevel.NONE, None
     else: # DANE in use
         if dane_validator.dane_validated:
-            return ErrorLevel.NONE, f'✅ DANE TLSA Record successfuly validated.'
+            return ErrorLevel.NONE, Finding(DisplayLevel.POSITIVE, f'✅ DANE TLSA Record successfuly validated.')
         elif dane_validator.dane_failure == True and config.enforce_dane:
             logging.error("Blocking request per 'enforce_dane' configuration.")
-            return ErrorLevel.FATAL, f'{dane_validator.violation}'
+            return ErrorLevel.FATAL, Finding(DisplayLevel.CRITICAL, f'{dane_validator.violation}')
         elif dane_validator.dnssec_failure == True and config.require_dnssec:
             logging.error("Blocking request per 'enforce_dnssec' configuration.")
-            return ErrorLevel.FATAL, f'{dane_validator.violation}'
+            return ErrorLevel.FATAL, Finding(DisplayLevel.CRITICAL, f'{dane_validator.violation}')
         else:
-            return ErrorLevel.CRIT, f'{dane_validator.violation}'
+            return ErrorLevel.CRIT, Finding(DisplayLevel.CRITICAL, f'{dane_validator.violation}')
 
 def dnssec_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Optional[str]:
     logging.warning(f"-----------------------------------Entering dnssec_check()----------------------------------------")
-    if dane_validator.authenticated_data:
-        logging.info('DNSSEC is enabled for zone.')
-        return ErrorLevel.NONE, f'✅ The DNS zone is DNSSEC-signed and has a valid chain of trust.'
+    if dane_validator.authenticated_data:     # Save an additional DNS lookup by leveraging the existing DANE TLSA record check.
+        logging.debug('DNSSEC is enabled for zone.')
+        return ErrorLevel.NONE, Finding(DisplayLevel.POSITIVE, f'✅ The DNS zone is DNSSEC-signed and has a valid chain of trust.')
+    else:
+        logging.debug('DNSSEC is not enabled for zone.')
+        return ErrorLevel.NONE, Finding(DisplayLevel.VERBOSE, f'&nbsp;✘&nbsp;&nbsp;The DNS zone is not DNSSEC-signed.')
+
+def x509_version_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Optional[str]:
+    """
+    Check all certs in the provided cert chain for any cert with an x.509 version number less than v3.
+
+    Note: The cryptography library represents versions as an enum-like object:
+        x509.Version.v1  -> 0
+        x509.Version.v2  -> 1
+        x509.Version.v3  -> 2
+    ...But actual X.509 versions are 1, 2, 3 respectively.
+    """
+    violations = []
+
+    for i, cert in enumerate(cert_chain):
+        cryptography_version_value = cert.version.value
+
+        # Convert to X.509 version numbers (1, 2, 3)
+        x509_version = cryptography_version_value + 1
+    
+        if x509_version < 3:
+            if i == 0:
+                violations.append(f'⛔ Server certificate is an x509v{x509_version} cert!')
+            else:
+                violations.append(f'⛔ Certificate #{i} in chain is an x509v<b>{x509_version}</b> cert.')
+
+    if violations:
+        return ErrorLevel.FATAL, Finding(DisplayLevel.CRITICAL, "<br".join(violations))
     else:
         return ErrorLevel.NONE, None

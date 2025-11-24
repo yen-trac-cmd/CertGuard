@@ -432,7 +432,7 @@ def verify_inclusion(sct_data: bytes, ct_log_url: str, sct_timestamp: int, log_m
         str:  Error encountered during inclusion checking logic.
     """
     logging.warning("-----------------------------------Entering verify_inclusion()------------------------------------")
-    REQUEST_TIMEOUT = 4.25 # seconds
+    REQUEST_TIMEOUT = 4.5 # seconds
     sth_url = ct_log_url + 'ct/v1/get-sth'
     proof_url_template = ct_log_url + 'ct/v1/get-proof-by-hash?hash={}&tree_size={}'
 

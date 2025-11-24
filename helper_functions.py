@@ -7,14 +7,13 @@ import sys
 from cryptography import x509
 from cryptography.x509.oid import ExtensionOID
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import serialization, hashes
-from cryptography.hazmat.primitives.asymmetric import padding
-#from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519, ed448, dsa, padding
+from cryptography.hazmat.primitives import serialization
+#from cryptography.hazmat.primitives.asymmetric import padding
 from datetime import datetime, timedelta, timezone
-from enum import Enum
-from mitmproxy import certs, http
+#from enum import Enum
+from mitmproxy import http
 from requests_cache import CachedSession, timedelta
-from typing import Sequence
+#from typing import Sequence
 from urllib.parse import urlparse
 
 def is_navigation_request(flow: http.HTTPFlow, referer_header, accept_header) -> bool:
@@ -146,23 +145,23 @@ def load_public_suffix_list() -> list[str]:
     
     return public_suffix_list
 
-def get_cert_domains(x509_cert: certs.Cert) -> list[str]:
+def get_cert_domains(x509_cert: x509.Certificate) -> list[str]:
     """
     Extract CN and DNS SubAltNames from a mitmproxy.certs.Cert object.
 
     Args:
-        x509_cert (mitmproxy.certs.Cert): A mitmproxy.certs.Cert object containing the certificate to extract domains from.
+        x509_cert: A x509.Certificate object containing the certificate to extract FQDNs from.
 
     Returns:
-        list[str]: A de-duplicated list of FQDN strings, in lower-case, found in the supplied certificate.
+        list[str]: A de-duplicated list of lower-case FQDN strings found in the supplied certificate.
     """
     domains = set()
 
-    # Subject CN
+    # Extract Subject CN
     for attr in x509_cert.subject.get_attributes_for_oid(x509.oid.NameOID.COMMON_NAME):
         domains.add(attr.value.lower())
 
-    # SANs
+    # Extract SANs
     try:
         san_ext = x509_cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
         for name in san_ext.value.get_values_for_type(x509.DNSName):
@@ -303,7 +302,7 @@ def clean_error(html_string: str) -> str:
     from lxml.html import fromstring
     import re
 
-    cz_to_replace = r"🛈|ℹ️|✅|⛔|⚠️|▶|&nbsp;|&emsp;"
+    cz_to_replace = r"🛈|ℹ️|✅|✘|❌|⛔|⚠️|▶|&nbsp;|&emsp;"
     
     error_text = re.sub(cz_to_replace, '', html_string).strip()
     tree = fromstring(error_text)

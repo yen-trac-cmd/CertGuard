@@ -65,9 +65,9 @@ class OCSPStaplingConfig(TlsConfig):
                         # Parse and validate the OCSP response
                         try:
                             # Get the server's certificate chain for validation
-                            cert_chain = conn.get_peer_cert_chain(as_cryptography=True)  #########################################################################
+                            cert_chain = conn.get_peer_cert_chain(as_cryptography=True)
                             cert_chain = deduplicate_chain(cert_chain)
-                            self.parse_and_validate_ocsp_response(ocsp_data, cert_chain, conn_id)
+                            self.parse_and_validate_ocsp_response(ocsp_data, cert_chain[0], conn_id)
                         except Exception as e:
                             logging.error(f"[OCSP] Failed to parse/validate OCSP response: {e}")
                     
@@ -105,8 +105,8 @@ class OCSPStaplingConfig(TlsConfig):
             
             if ocsp_resp.response_status == ocsp.OCSPResponseStatus.SUCCESSFUL:
                 # Validate the OCSP response signature
+                logging.warning(f'-----------------------> type(cert_chain) = {type(cert_chain)}')
                 signature_valid = validate_ocsp_signature(ocsp_resp, cert_chain)
-                
                 # Store serializable data
                 if conn_id in self.ocsp_by_connection:
                     self.ocsp_by_connection[conn_id]["ocsp_cert_status"] = ocsp_resp.certificate_status.name

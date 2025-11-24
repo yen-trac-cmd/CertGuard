@@ -73,11 +73,6 @@ def check_caa_per_domain(config, domain: str, ca_identifiers: list[str]) -> tupl
             answers=answers[0]
             logging.debug(f'Full resource record set: {answers}')
            
-            if answers.flags & dns.flags.AD:   # Indicates a DNSSEC-validated resposne; dns.flags.AD = 32
-                logging.info(f'DNSSEEC validation successful for CAA query (AD bit set in response).')
-            else:
-                logging.warning(f'DNSSEEC validation for {check_domain} failed.')
-
         except Exception as e:
             logging.warning(f' Aborting further CAA checks due to exception: "{e}"')
             continue

@@ -69,31 +69,31 @@ def error_screen(config, flow, token, color, violations, error_level):
     violations_html = '<br>'.join(v for v in violations if v)
 
     warning_html = f"""
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>CertGuard Warning!</title>
-          <style>
-            body         {{ margin:0; font-family:Arial, sans-serif; background:{bg}; color:#333; }}
-            .warning-box {{ max-width:700px; margin:10% auto; padding:30px; border:3px solid {errorlevel_color}; border-radius:12px; background:#fff; box-shadow:0 4px 12px rgba(0,0,0,0.15); }}
-            h1           {{ color:{errorlevel_color}; margin-top:0; }}
-            p            {{ font-size:1.1em; line-height:1.6; }}
-            a.std        {{}}
-            a.btn        {{ display:inline-block; padding:10px 15px; background:{errorlevel_color}; color:white; text-decoration:none; border-radius:4px; cursor:pointer; }}              
-          </style>
-          {javascript if config.token_mode == 'header' and error_level < ErrorLevel.FATAL.value else ""}
-          </head>
-          <body>
-            <div class="warning-box">
-                <h1>Level {error_level} Warning</h1>
-                <p>{violations_html}</p>
-                <p>The domain <strong>{flow.request.pretty_host}</strong> violated one or more safety checks!</p>
-                {prompt}
-            </div>
-          </body>
-        </html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CertGuard Warning!</title>
+    <style>
+    body         {{ margin:0; font-family:Arial, sans-serif; background:{bg}; color:#333; }}
+    .warning-box {{ max-width:700px; margin:10% auto; padding:30px; border:3px solid {errorlevel_color}; border-radius:12px; background:#fff; box-shadow:0 4px 12px rgba(0,0,0,0.15); }}
+    h1           {{ color:{errorlevel_color}; margin-top:0; }}
+    p            {{ font-size:1.1em; line-height:1.6; }}
+    a.std        {{}}
+    a.btn        {{ display:inline-block; padding:10px 15px; background:{errorlevel_color}; color:white; text-decoration:none; border-radius:4px; cursor:pointer; }}              
+    </style>
+    {javascript if config.token_mode == 'header' and error_level < ErrorLevel.FATAL.value else ""}
+    </head>
+    <body>
+    <div class="warning-box">
+        <h1>Level {error_level} Warning</h1>
+        <p>{violations_html}</p>
+        <p>The domain <strong>{flow.request.pretty_host}</strong> violated one or more safety checks!</p>
+        {prompt}
+    </div>
+    </body>
+</html>
         """
        
     warning_html = "\n".join(line.rstrip() for line in warning_html.splitlines() if line.strip())

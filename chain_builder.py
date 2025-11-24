@@ -140,9 +140,6 @@ def get_root_cert(
                 continue
 
     logging.error(f"No trust anchor cert found!")
-    #try:
-        #return None, last_cert.issuer.get_attributes_for_oid(x509.NameOID.COMMON_NAME)[0].value, None, None
-    #except:
     return None, last_cert.issuer.rfc4514_string(), None, None
 
 def verify_signature(subject: x509.Certificate, issuer: x509.Certificate) -> None:
@@ -194,14 +191,17 @@ def deduplicate_chain(cert_chain: Sequence[x509.Certificate]) -> Sequence[x509.C
     """ Removes duplicate certs from provided certificate chain """
     seen = set()
     unique_chain = []
+    findings = []
     for cert in cert_chain:
         fp = cert.fingerprint(hashes.SHA256())
         if fp not in seen:
             seen.add(fp)
             unique_chain.append(cert)
         else:
-            logging.warning(f"Duplicate certificate detected: {cert.subject.rfc4514_string()}")
-    return unique_chain
+            finding = f"⚠️ Duplicate certificate detected: {cert.subject.rfc4514_string()}"
+            logging.warning(finding)
+            findings.append(finding)
+    return unique_chain, "<br>".join(findings)
 
 def build_cert_index(chain) -> Tuple[dict[str, x509.Certificate], dict[str, x509.Certificate]]:
     """Build lookup structures for efficient parent certificate resolution."""
@@ -224,7 +224,6 @@ def find_leaf_cert(chain: list[x509.Certificate]) -> x509.Certificate:
     Identify the leaf certificate as the one whose subject does NOT appear as any other certificate's issuer.
     """
     all_issuers = {cert.issuer.rfc4514_string() for cert in chain}
-    
     for cert in chain:
         if cert.subject.rfc4514_string() not in all_issuers:
             return cert
@@ -250,33 +249,32 @@ def find_parent(child: x509.Certificate, by_subject: dict, by_skid: dict) -> Opt
     
     return None
 
-def normalize_chain(chain: list[x509.Certificate]) -> Sequence[x509.Certificate]:
+def normalize_chain(chain: list[x509.Certificate]) -> Tuple[Sequence[x509.Certificate], Optional[str]]:
     """
     Return a deduplicated, properly ordered certificate chain.
     
     Args:
-        chain: List of x509.Certificate objects in any order
+        chain:      List of x509.Certificate objects in any order
         
     Returns:
-        List of certificates ordered from leaf to root
+        ordered:    List of certificates ordered from leaf to root
+        findings:   
         
     Raises:
         ValueError: If leaf certificate cannot be determined
     """
     logging.warning("-----------------------------------Entering normalize_chain()-------------------------------------")
-    # Remove duplicates
-    chain = deduplicate_chain(chain)
+    findings = []
     logging.debug(f'Chain prior to de-duplication & reordering: {[cert.subject.rfc4514_string() for cert in chain]}')
 
-    '''
-    logging.error(f'type(chain): {type(chain)}')
-    for cert in chain:
-        logging.error(f'type(cert): {type(cert)}')
-    '''
+    # Remove duplicates
+    chain, dups = deduplicate_chain(chain)
+    if dups:
+        findings.append(dups)
 
     if len(chain) == 1:
         logging.error(f'Encountered Unchained certificate: {chain[0].subject.rfc4514_string()}')
-        return chain
+        return chain, f'⚠️ Encountered Unchained certificate:<br><b>{chain[0].subject.rfc4514_string()}</b>'
 
     # Build lookup indexes
     by_subject, by_skid = build_cert_index(chain)
@@ -294,4 +292,7 @@ def normalize_chain(chain: list[x509.Certificate]) -> Sequence[x509.Certificate]
         seen.add(current)
         current = find_parent(current, by_subject, by_skid)
     
-    return ordered
+    if chain != ordered:
+        findings.append(f"⚠️ Certificate chain out-of-order.")
+    
+    return ordered, "<br>".join(findings)

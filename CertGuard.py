@@ -289,6 +289,8 @@ def request(flow: http.HTTPFlow) -> None:
         dnssec_check,
     ] 
 
+    blockpage_color = ErrorLevel.NONE.color
+
     for check in my_checks:
         error, finding = check(flow, cert_chain)
         if error.value > highest_error_level:

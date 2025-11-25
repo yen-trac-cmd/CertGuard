@@ -9,5 +9,9 @@ scripts/
 *.log
 logfile*
 
+# CertGuard ephemeral content
+resources/public_suffix_list.dat/*.json
+resources/ct_log_list.json/*.json
+
 # Testing
 test*

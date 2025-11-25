@@ -315,3 +315,60 @@ def record_decision(db_path, host, decision, root_fingerprint) -> None:
     with sqlite3.connect(db_path) as conn:
         conn.execute("REPLACE INTO decisions (host, decision, root, timestamp) VALUES (?, ?, ?, ?)", (host, decision, root_fingerprint, now))
         conn.commit()
+
+import requests
+from cryptography import x509
+from cryptography.hazmat.backends import default_backend
+from cryptography.x509.oid import AuthorityInformationAccessOID
+
+def fetch_issuer_certificate(cert: x509.Certificate) -> x509.Certificate | None:
+    """
+    Extracts the CA Issuer URL from the AIA extension (if present),
+    downloads the certificate, and returns it as an x509.Certificate object.
+    Returns None if no issuer cert is present or downloadable.
+    """
+
+    try:
+        aia = cert.extensions.get_extension_for_oid(
+            x509.ExtensionOID.AUTHORITY_INFORMATION_ACCESS
+        ).value
+    except x509.ExtensionNotFound:
+        logging.warning("No AIA extension found.")
+        return None
+
+    ca_issuer_urls = [
+        desc.access_location.value
+        for desc in aia
+        if desc.access_method == AuthorityInformationAccessOID.CA_ISSUERS
+    ]
+
+    if not ca_issuer_urls:
+        logging.warning("No CA Issuers entry found in AIA.")
+        return None
+
+    issuer_url = ca_issuer_urls[0]
+    logging.info(f"Downloading Issuing CA certificate from: {issuer_url}")
+
+    try:
+        response = requests.get(issuer_url, timeout=5)
+        response.raise_for_status()
+    except Exception as e:
+        logging.error(f"Failed to download Issuing CA certificate: {e}")
+        return None
+
+    data = response.content
+
+    # Try to load as DER
+    try:
+        return x509.load_der_x509_certificate(data)
+    except Exception:
+        pass
+
+    # Try to load as PEM
+    try:
+        return x509.load_pem_x509_certificate(data)
+    except Exception:
+        pass
+
+    logging.error("Downloaded Issuer certificate could not be parsed as DER or PEM.")
+    return None

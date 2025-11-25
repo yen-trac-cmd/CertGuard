@@ -46,6 +46,11 @@ def check_cert_chain_revocation(cert_chain: list[x509.Certificate], skip_leaf: b
         cert = cert_chain[i]
         issuer = cert_chain[i + 1] if i + 1 < len(cert_chain) else None
 
+        # If working with unchained cert, attempt to fetch Issuer cert
+        from helper_functions import fetch_issuer_certificate
+        if skip == 0:
+            issuer = fetch_issuer_certificate(cert)
+
         # Get certificate common name for logging messages
         try:
             cn = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value

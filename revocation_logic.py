@@ -28,8 +28,10 @@ def check_cert_chain_revocation(cert_chain: list[x509.Certificate], skip_leaf: b
         - (False, None, error_messages) if checks failed
     """
     logging.warning(f"-----------------------------------Entering check_cert_chain_revocation()-------------------------")
-    if not cert_chain or len(cert_chain) == 0:
-        return (False, "Empty certificate chain provided")
+    if len(cert_chain) == 1:
+        if cert_chain[0].subject == cert_chain[0].issuer:
+            logging.warning('return (Skipping revocation check for self-signed cert.')
+            return (False, "Revocation checks skipped for self-signed cert.")
     
     all_errors = []
     

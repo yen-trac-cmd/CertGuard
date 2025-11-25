@@ -186,7 +186,7 @@ def request(flow: http.HTTPFlow) -> None:
 
     elif self_signed:
         #TODO: Add logic for DANE usage type 3, where cert may be self-attested in TLSA record.
-        findings.append(Finding(DisplayLevel.WARNING, f'⚠️ Encountered self-signed certificate:<br>&emsp;&emsp;<b>{self_signed.subject.rfc4514_string()}</b>'))
+        findings.append(Finding(DisplayLevel.WARNING, f'⚠️ Encountered self-signed certificate:&emsp;&emsp;<b>{self_signed.subject.rfc4514_string()}</b>'))
         highest_error_level = ErrorLevel.ERROR.value
         blockpage_color = ErrorLevel.ERROR.color
         root_hash = self_signed.fingerprint(hashes.SHA256()).hex()

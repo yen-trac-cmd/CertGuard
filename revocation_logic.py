@@ -28,17 +28,21 @@ def check_cert_chain_revocation(cert_chain: list[x509.Certificate], skip_leaf: b
         - (False, None, error_messages) if checks failed
     """
     logging.warning(f"-----------------------------------Entering check_cert_chain_revocation()-------------------------")
+    
+    skip = 1  # Skip root for revocation checking.
     if len(cert_chain) == 1:
         if cert_chain[0].subject == cert_chain[0].issuer:
             logging.warning('return (Skipping revocation check for self-signed cert.')
-            return (False, "Revocation checks skipped for self-signed cert.")
+            return (False, "⚠️ Revocation checks skipped for self-signed cert.")
+        else:
+            # If not self-signed / root, implies incomplete certificate chain. Proceed with revocation checking in this case.
+            skip = 0 
     
+    # Check each certificate in the chain (except true root CA certs)
     all_errors = []
-    
-    # Check each certificate in the chain (except root, which is self-signed)
     revoked = False
 
-    for i in range(len(cert_chain) - 1):
+    for i in range(len(cert_chain) - skip):
         cert = cert_chain[i]
         issuer = cert_chain[i + 1] if i + 1 < len(cert_chain) else None
 

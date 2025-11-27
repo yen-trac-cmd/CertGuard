@@ -24,9 +24,8 @@ Instead, CertGuard serves as a research tool and demonstration framework for imp
 ---
 
 ## ⚠️ Disclaimer
-
-CertGuard intercepts/decrypts HTTPS traffic via mitmproxy and performs deep inspection of certificates and network metadata.  
-Use it **only in controlled environments**,  and only if you understand the security implications.
+CertGuard intercepts/decrypts HTTPS traffic via mitmproxy and performs deep inspection of certificates and 
+network metadata. Use it **only in controlled environments**,  and only if you understand the security implications.
 
 ---
 
@@ -38,11 +37,10 @@ https://docs.mitmproxy.org/stable/overview/installation/
 
 Don't forget to install the Certificate Authority that mitmproxy generates for your installation.  This is covered at:
 https://docs.mitmproxy.org/stable/overview/getting-started/
----
 
 ### 2. Create a virtual environment & clone CertGuard
 
-```bash
+```
 python3 -m venv ~/CertGuard
 source ~/CertGuard/bin/activate
 cd ~/CertGuard
@@ -50,23 +48,22 @@ git clone https://github.com/yen-trac-cmd/CertGuard/
 ```
 
 ### 3. Install Python dependencies
-Inside the activated virtual environment:
-`pip install cryptography dnspython requests-cache lxml`
+Inside the activated virtual environment, execute:
+`pip install cryptography dnspython lxml requests-cache`
 
 ### 4. Configure CertGuard
-Inside the cloned repo, locate `config.toml` and adjust the configuration to suit your needs:
+Adjust the self-documented `config.toml` configuration file to suit your needs.
 
 - Enable/disable certificate validation modules
-- Set error severity levels
+- Set error logging severity levels
 - Configure CA and country validation rules
-- Tune DNS/DANE options
-- Control logging and output behavior
-- CertGuard is modular, and all major behaviors can be toggled or customized.
+- Tune DANE options
+- etc.
 
 
 ## 🚀 Running CertGuard
 From the CertGuard project directory (where certguard.py resides), launch mitmproxy with the CertGuard script:
-```bash
+```
 mitmproxy -s ./src/CertGuard/certguard.py
 ```
 
@@ -74,6 +71,6 @@ After starting mitmproxy, direct your browser or test device to use the proxy.
 CertGuard will analyze certificates and display validation results in real-time.
 
 ## 🛠 Project Status
-CertGuard is merely a proof-of-concept created as part of a research project.  It is **not** suitable for use in production environments.  It's also a work-in-progress and APIs, validation logic, and output formatting may evolve rapidly as features are refined.
+CertGuard is merely a proof-of-concept created as part of a research project and is **not** suitable for use in production environments and has **not** been code-reviewed for security vulnerabilities.  It's also a work-in-progress, so APIs, validation logic, and output formatting may evolve rapidly as features are refined.  USE AT YOUR OWN RISK!
 
 Feedback, issue reports, and suggestions are welcome.

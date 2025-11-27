@@ -104,7 +104,7 @@ def get_root_cert(
     # TODO: Add additional logic to handle DANE usage types 2 and 3 when using private CA or self-signed leaf certs.
     root_in_chain = False
     if last_cert.subject == last_cert.issuer:
-        logging.debug('Note: Root cert included in cert chain from webserver.')
+        logging.warning('Note: Root cert included in cert chain from webserver.')
         if len(server_chain) > 2:
             last_cert = server_chain[-2]
         root_in_chain = True

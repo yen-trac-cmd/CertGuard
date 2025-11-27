@@ -461,7 +461,7 @@ def validate_ocsp_signature(ocsp_resp: ocsp.OCSPResponse, cert_chain: list[x509.
                     continue
                 except Exception as e:
                     logging.error(f'Encountered exception attempting to check EKUs for OCSP responder certificate: {e}')
-                    # Parsing error - work around by checking raw DER bytes
+                    # Work around cryptography library EKU parsing bug (for OCSP responder certs) by checking raw DER bytes
                     logging.warning(f"Attempting to validate against raw DER data as a workaround to parsing bugs...")
                     try:
                         # Get the raw certificate DER

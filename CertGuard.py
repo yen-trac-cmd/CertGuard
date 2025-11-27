@@ -1,3 +1,17 @@
+import json
+import logging
+import os
+import sqlite3
+import uuid
+from certguard_checks import dane_validator
+from certguard_config import BYPASS_PARAM, Config, DisplayLevel, ErrorLevel, Finding, Logger
+from chain_builder import get_root_cert, normalize_chain
+from cryptography.x509 import NameOID
+from cryptography.hazmat.primitives import hashes
+from error_screen import error_screen
+from helper_functions import clean_error, get_root_store, is_navigation_request, record_decision, supported_ciphers_list, func_name
+from mitmproxy import ctx, http, addonmanager
+from tls_extensions import OCSPStaplingConfig
 from certguard_checks import (
     dane_check,
     dnssec_check,
@@ -14,20 +28,6 @@ from certguard_checks import (
     x509_version_check,
     test_check
 )
-from certguard_checks import dane_validator
-from certguard_config import BYPASS_PARAM, Config, DisplayLevel, ErrorLevel, Finding, Logger
-from chain_builder import get_root_cert, normalize_chain
-from cryptography.x509 import NameOID
-from cryptography.hazmat.primitives import hashes
-from error_screen import error_screen
-from helper_functions import clean_error, get_cert_domains, get_root_store, is_navigation_request, record_decision, supported_ciphers_list
-from mitmproxy import ctx, http, addonmanager
-from tls_extensions import OCSPStaplingConfig
-import json
-import logging
-import os
-import sqlite3
-import uuid
 
 #================================================================ Main ================================================================
 
@@ -137,7 +137,7 @@ def request(flow: http.HTTPFlow) -> None:
                     
                     # Return during hunt for any website using stapled SCTs in OCSP response.
                     finding = f'Found SCT in stapled OCSP response for <b>{flow.request.pretty_url}!!</b>.'
-                    findings.append(Finding(DisplayLevel.WARNING, finding))
+                    findings.append(Finding(DisplayLevel.WARNING, func_name(), finding))
                     #error_screen(config, flow, None, ErrorLevel.FATAL.color, [finding], ErrorLevel.FATAL.value)
 
                     # TODO: If ever encounter real-life SCT in stapled OCSP response, pass into Certificate Transparency 
@@ -166,7 +166,7 @@ def request(flow: http.HTTPFlow) -> None:
     cert_chain, errors = normalize_chain([cert.to_cryptography() for cert in cert_chain])
     if errors:
         highest_error_level = ErrorLevel.ERROR.value
-        findings.append(Finding(DisplayLevel.WARNING, errors))
+        findings.append(Finding(DisplayLevel.WARNING, func_name(), errors))
     
     # Retrieve validated root cert as cryptography.hazmat.bindings._rust.x509.Certificate object.
     root_cert, claimed_root, verification_error, self_signed = get_root_cert(cert_chain, root_store)
@@ -175,35 +175,41 @@ def request(flow: http.HTTPFlow) -> None:
         # Add root cert to chain (if not already present) for a complete / validated chain
         if cert_chain[-1].subject == cert_chain[-1].issuer:
             highest_error_level = ErrorLevel.ERROR.value
-            findings.append(Finding(DisplayLevel.WARNING, f'⚠️ Root certificate present in server-supplied cert chain.'))
+            findings.append(Finding(DisplayLevel.WARNING, func_name(), f'⚠️ Root certificate present in server-supplied cert chain.'))
         else:
             cert_chain.append(root_cert)
         
         # Fetch org name for verbose block pages        
+        ca_org = None
         for attr in root_cert.subject.get_attributes_for_oid(NameOID.ORGANIZATION_NAME):
             ca_org = attr.value
-        findings.append(Finding(DisplayLevel.VERBOSE, f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;Root CA Operator: {ca_org}'))
+        
+        if not ca_org:
+            violation = f"⛔ No Organization (O=) value found in root CA certificate:<br>&emsp;&emsp;▶ <b>{root_cert.subject.rfc4514_string()}</b>"
+            findings.append(Finding(DisplayLevel.CRITICAL, func_name(), violation))
+        else:
+            findings.append(Finding(DisplayLevel.VERBOSE, func_name(), f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;Root CA Operator: {ca_org}'))
 
     elif self_signed:
         #TODO: Add logic for DANE usage type 3, where cert may be self-attested in TLSA record.
-        findings.append(Finding(DisplayLevel.WARNING, f'⚠️ Encountered self-signed certificate:&emsp;&emsp;<b>{self_signed.subject.rfc4514_string()}</b>'))
+        findings.append(Finding(DisplayLevel.WARNING, func_name(), f'⚠️ Encountered self-signed certificate:&emsp;&emsp;<b>{self_signed.subject.rfc4514_string()}</b>'))
         highest_error_level = ErrorLevel.ERROR.value
         blockpage_color = ErrorLevel.ERROR.color
         root_hash = self_signed.fingerprint(hashes.SHA256()).hex()
     elif claimed_root:
         #TODO: Add logic for DANE usage type 2, where root may be a private CA.
-        logging.error(f'Could not validate cert against claimed Issuer cert of: ({claimed_root}).')
-        findings.append(Finding(DisplayLevel.CRITICAL, f'⛔ Could not validate cert against claimed Issuer cert of:<br>&emsp;&emsp;<b>{claimed_root}</b>'))
+        logging.error(f'Could not validate chained cert against claimed Issuer of: ({claimed_root}).')
+        findings.append(Finding(DisplayLevel.CRITICAL, func_name(), f'⛔ Could not validate cert against claimed Issuer cert of:<br>&emsp;&emsp;<b>{claimed_root}</b>'))
         if len(cert_chain) == 1:
             logging.error(f'Server failed to send complete certificate chain.')
-            findings.append(Finding(DisplayLevel.WARNING, '&emsp;&emsp;▶ Server failed to send complete certificate chain.'))
+            findings.append(Finding(DisplayLevel.WARNING, func_name(), '&emsp;&emsp;▶ Server failed to send complete certificate chain.'))
         highest_error_level = ErrorLevel.FATAL.value
         blockpage_color = ErrorLevel.FATAL.color
         root_hash = f"Unidentified_root - {claimed_root}"
 
     if verification_error:
         logging.error(f'Encountered verification error while building certificate chain: {verification_error}')
-        findings.append(Finding(DisplayLevel.CRITICAL, f'⛔ Could not verify certificate chain: {verification_error}'))
+        findings.append(Finding(DisplayLevel.CRITICAL, func_name(), f'⛔ Could not verify certificate chain: {verification_error}'))
         highest_error_level = ErrorLevel.FATAL.value
         blockpage_color = ErrorLevel.FATAL.color
         root_hash = "Unverified root"
@@ -299,12 +305,12 @@ def request(flow: http.HTTPFlow) -> None:
         if finding:    
             findings.append(finding)
     
-    findings.sort(key=lambda f: f.level)
-    filtered_findings = [f.message for f in findings if f.level <= config.bp_verbosity]
-
     logging.info(f'-----------------------------------END verification for {host}--------------------------------------------')
-    
-    cleaned_errors = [clean_error(f) for f in filtered_findings]
+
+    # Sort findings by display level and structure as JSON for the logfile.
+    findings.sort(key=lambda f: f.level)
+    filtered_findings = [f for f in findings if f.level <= config.bp_verbosity]
+    cleaned_errors = [ {"check": f.check, "message": clean_error(f.message)} for f in filtered_findings]
     flow.metadata["CertGuard_findings"] = cleaned_errors if cleaned_errors else None
     flow.metadata["Highest_Errorlevel"] = highest_error_level
     if is_main_page:
@@ -312,7 +318,8 @@ def request(flow: http.HTTPFlow) -> None:
 
     logging.warning(f"----> The highest_error_level value is: {highest_error_level}.")
     if highest_error_level > ErrorLevel.NONE.value:
-        error_screen(config, flow, token, blockpage_color, filtered_findings, highest_error_level)
+        display_messages = [f.message for f in filtered_findings]
+        error_screen(config, flow, token, blockpage_color, display_messages, highest_error_level)
         record_decision(config.db_path, host, "blocked", root_hash)
         logging.error(f"Request to {host} blocked; Token={token}")
     else:
@@ -349,9 +356,9 @@ def done() -> None:
             f.seek(-2, os.SEEK_END)
             f.truncate()
             f.seek(0, os.SEEK_END)
-            f.write(b'\n],')
+            f.write(b'\n]')
             #dane_stats = (f'\n"DANE TLSA Validator statistics": {{"Validated": {dane_validator.stats['validated']}, "Failed": {dane_validator.stats['dane_failed']}, "No TLSA": {dane_validator.stats['no_tlsa']}, "DNS Failed": {dane_validator.stats['dns_failed']}, "DNSSEC Failed": {dane_validator.stats['dnssec_failed']}}}')
             #f.write(dane_stats.encode('utf-8'))
-            f.write(b'\n}')
+            f.write(b'\n}\n')
     except Exception as e:
         print(f'Error {e}')

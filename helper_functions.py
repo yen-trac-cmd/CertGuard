@@ -1,19 +1,18 @@
 import certifi
 import hashlib
+import inspect
 import logging
 import os
 import sqlite3
+import requests
 import sys
 from cryptography import x509
-from cryptography.x509.oid import ExtensionOID
+from cryptography.x509.oid import AuthorityInformationAccessOID, ExtensionOID
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
-#from cryptography.hazmat.primitives.asymmetric import padding
 from datetime import datetime, timedelta, timezone
-#from enum import Enum
 from mitmproxy import http
 from requests_cache import CachedSession, timedelta
-#from typing import Sequence
 from urllib.parse import urlparse
 
 def is_navigation_request(flow: http.HTTPFlow, referer_header, accept_header) -> bool:
@@ -297,6 +296,9 @@ def get_ede_description(code: int) -> str:
     }
     return EDE_CODES_MAP.get(code, "Unknown EDE Code")
 
+def func_name() -> str:
+    return inspect.currentframe().f_back.f_code.co_name
+
 def clean_error(html_string: str) -> str:
     """Strips HTML tags using lxml and removes unicode characters to produce text-only error."""
     from lxml.html import fromstring
@@ -315,11 +317,6 @@ def record_decision(db_path, host, decision, root_fingerprint) -> None:
     with sqlite3.connect(db_path) as conn:
         conn.execute("REPLACE INTO decisions (host, decision, root, timestamp) VALUES (?, ?, ?, ?)", (host, decision, root_fingerprint, now))
         conn.commit()
-
-import requests
-from cryptography import x509
-from cryptography.hazmat.backends import default_backend
-from cryptography.x509.oid import AuthorityInformationAccessOID
 
 def fetch_issuer_certificate(cert: x509.Certificate) -> x509.Certificate | None:
     """

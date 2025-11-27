@@ -1,9 +1,8 @@
 import dns.resolver
-import json
 import ipaddress
+import json
 import logging
 import tomllib
-import logging
 from collections import deque
 from dataclasses import dataclass
 from enum import Enum, IntEnum
@@ -120,10 +119,9 @@ class Config:
         #    f.write(recombined)
 
 class Logger:
+    from __init__ import __version__
     _logger = None
-    # Declare CertGuard version
-    version = "0.8"
-    log_file = "logfile.log"
+    log_file = "logs/logfile.log"
 
     @classmethod
     def get_logger(self):
@@ -131,7 +129,7 @@ class Logger:
             return self._logger
         
         with open(self.log_file, 'a') as f:
-            f.write(f'\n===============================================\n{{\n"CertGuard_version": "{self.version}",\n"site_visits": [\n')
+            f.write(f'\n===============================================\n{{\n"CertGuard_version": "{self.__version__}",\n"site_visits": [\n')
 
         log_format = '{"Timestamp": "%(asctime)s.%(msecs)03d", %(message)s},'
         date_format = '%Y-%m-%dT%H:%M:%S'

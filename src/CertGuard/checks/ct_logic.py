@@ -8,8 +8,6 @@ import requests
 import sys
 import time
 import urllib.parse
-from requests_cache import CachedSession
-from helper_functions import get_cert_domains
 from cryptography import x509, exceptions
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -19,7 +17,9 @@ from cryptography.x509.oid import ExtensionOID
 from datetime import timedelta
 from enum import IntEnum
 from mitmproxy import http
+from requests_cache import CachedSession
 from typing import Optional, Tuple
+from utils.x509 import get_cert_domains
 
 SSLMATE_QUERY_URL = "https://api.certspotter.com/v1/issuances"
 CT_LOG_LIST_URL   = "https://www.gstatic.com/ct/log_list/v3/log_list.json"     # Google's authoritative CT Log list
@@ -231,7 +231,7 @@ def extract_scts(cert: x509.Certificate, ct_log_map) -> list[dict]:
         
     return sct_data
 
-def validate_signature(cert: x509.Certificate, issuer_cert: x509.Certificate, sct: dict) -> tuple[bool, str, bytes | None]:
+def validate_sct_signature(cert: x509.Certificate, issuer_cert: x509.Certificate, sct: dict) -> tuple[bool, str, bytes | None]:
     """
     Validate ECDSA digital signature on a Signed Certificate Timestamp (SCT)
     Code adapted from https://research.ivision.com/how-does-certificate-transparency-work.html.

@@ -1,11 +1,10 @@
 import logging
+from checks.helper_functions import is_self_signed
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519, ed448, dsa, padding
-from helper_functions import calculate_spki_hash, get_spkid, get_akid, is_self_signed
 from typing import Sequence, Optional, Tuple
-
-import helper_functions
+from utils.x509 import calculate_spki_hash, get_akid, get_spkid
 
 def get_root_cert(
         server_chain: Sequence[x509.Certificate], 
@@ -38,7 +37,7 @@ def get_root_cert(
         #self_signed = server_chain[0].issuer.rfc4514_string()
         cert = server_chain[0]
         # Confirm it's properly self-signed before returning...
-        if helper_functions.is_self_signed(cert):
+        if is_self_signed(cert):
             return None, None, None, cert
         else:  # Signature verification failed
             if cert.subject == cert.issuer:
@@ -229,7 +228,7 @@ def find_leaf_cert(chain: list[x509.Certificate]) -> x509.Certificate:
             return cert
     
     # If reach here, was not able to identify leaf cert
-    raise ValueError("Could not determine leaf certificate in chain")
+    return None
 
 def find_parent(child: x509.Certificate, by_subject: dict, by_skid: dict) -> Optional[x509.Certificate]:
     """
@@ -274,13 +273,17 @@ def normalize_chain(chain: list[x509.Certificate]) -> Tuple[Sequence[x509.Certif
 
     if len(chain) == 1:
         logging.error(f'Encountered Unchained certificate: {chain[0].subject.rfc4514_string()}')
-        return chain, f'⚠️ Encountered Unchained certificate:<br><b>{chain[0].subject.rfc4514_string()}</b>'
+        return chain, f'⚠️ Encountered Unchained certificate:<br>&emsp;&emsp;<b>{chain[0].subject.rfc4514_string()}</b>'
 
     # Build lookup indexes
     by_subject, by_skid = build_cert_index(chain)
     
     # Find starting point (leaf certificate)
     leaf = find_leaf_cert(chain)
+    
+    if not leaf:
+        leaf = chain[0]
+        findings.append("⚠️ Could not programmatically verify leaf certificate in chain.")
     
     # Walk the chain from leaf to root
     ordered = []

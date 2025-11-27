@@ -5,6 +5,7 @@ __pycache__/
 
 # CertGuard private content
 scripts/
+log/*
 *.db
 *.log
 logfile*
@@ -14,4 +15,8 @@ resources/public_suffix_list.dat/*.json
 resources/ct_log_list.json/*.json
 
 # Testing
+tests/
 test*
+
+# Misc
+.vscode/

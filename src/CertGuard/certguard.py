@@ -1,18 +1,21 @@
+#from __init__ import __version__
+#from _version import __version__
 import json
 import logging
 import os
 import sqlite3
 import uuid
-from certguard_checks import dane_validator
-from certguard_config import BYPASS_PARAM, Config, DisplayLevel, ErrorLevel, Finding, Logger
-from chain_builder import get_root_cert, normalize_chain
+from checks.certguard_checks import dane_validator
+from checks.chain_builder import get_root_cert, normalize_chain
+from checks.helper_functions import clean_error, get_root_store, is_navigation_request, record_decision, supported_ciphers_list #, func_name
+from checks.tls_logic import OCSPStaplingConfig
+from config.certguard_config import BYPASS_PARAM, Config, DisplayLevel, ErrorLevel, Finding, Logger
 from cryptography.x509 import NameOID
 from cryptography.hazmat.primitives import hashes
 from error_screen import error_screen
-from helper_functions import clean_error, get_root_store, is_navigation_request, record_decision, supported_ciphers_list, func_name
+from utils.misc import func_name
 from mitmproxy import ctx, http, addonmanager
-from tls_extensions import OCSPStaplingConfig
-from certguard_checks import (
+from checks.certguard_checks import (
     dane_check,
     dnssec_check,
     root_country_check, 

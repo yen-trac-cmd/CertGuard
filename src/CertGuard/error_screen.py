@@ -1,4 +1,4 @@
-from certguard_config import ErrorLevel, BYPASS_PARAM
+from config.certguard_config import ErrorLevel, BYPASS_PARAM
 from mitmproxy import http
 from urllib.parse import urlencode, urlparse, parse_qs, urlunparse
 

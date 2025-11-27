@@ -1,5 +1,6 @@
-from cryptography import x509
-from cryptography import exceptions
+import logging
+import requests
+from cryptography import x509, exceptions
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import dsa, ec, ed25519, ed448, padding, rsa
@@ -9,8 +10,7 @@ from datetime import datetime, timezone
 from requests.exceptions import RequestException
 from typing import Tuple, Optional
 from urllib3.exceptions import NameResolutionError
-import logging
-import requests
+from utils.x509 import fetch_issuer_certificate
 
 def check_cert_chain_revocation(cert_chain: list[x509.Certificate], skip_leaf: bool, timeout: int = 10) -> Tuple[bool, str, Optional[int], Optional[str], Optional[str]]:
     """
@@ -47,7 +47,6 @@ def check_cert_chain_revocation(cert_chain: list[x509.Certificate], skip_leaf: b
         issuer = cert_chain[i + 1] if i + 1 < len(cert_chain) else None
 
         # If working with unchained cert, attempt to fetch Issuer cert
-        from helper_functions import fetch_issuer_certificate
         if skip == 0:
             issuer = fetch_issuer_certificate(cert)
 
@@ -69,7 +68,6 @@ def check_cert_chain_revocation(cert_chain: list[x509.Certificate], skip_leaf: b
             all_errors.append(f"<br>&emsp;&emsp;▶ Cert #{i} (<code>{cn}</code>) is revoked per {method}<br>&emsp;&emsp;<b>Reason:</b> {reason}")
         
         if error:
-            #cn = ""
             logging.error(f'Error encountered checking cert #{i} ({cn}): {error}')
             all_errors.append(f"⚠️ Error encountered checking cert #{i} (<code>{cn}</code>):<br>&emsp;&emsp;▶ {error}")
     

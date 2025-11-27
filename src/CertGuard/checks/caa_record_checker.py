@@ -1,7 +1,7 @@
 import logging
 from dns.rdtypes.ANY import CAA
 from dns.resolver import dns
-from helper_functions import load_public_suffix_list
+from checks.helper_functions import load_public_suffix_list
 
 # Populate Public Suffix List from pre-loaded file
 public_suffix_list = load_public_suffix_list()
@@ -32,6 +32,7 @@ def check_caa_per_domain(config, domain: str, ca_identifiers: list[str]) -> tupl
 
     etld = False 
     records_found = False
+    warnings = []
     issue_properties = None
     issuewild_properties = None
 
@@ -90,9 +91,12 @@ def check_caa_per_domain(config, domain: str, ca_identifiers: list[str]) -> tupl
                         continue
                     elif rdata.flags not in (0, 128):    # All other flags are reserved per RFC8659.
                         logging.error(f'Invalid CAA flag value ({rdata.flags}) encountered; full CAA record: {rdata.to_text()}')
+                        warnings.append(f'&emsp;&emsp;▶ Invalid CAA flag value ("<code>{rdata.flags}</code>") encountered.')
+
                         continue
                     elif rdata.tag.decode('utf-8').lower() not in ("issue","issuewild","issuemail","issuevmc","iodef","contactemail","contactphone"):
-                        logging.error(f'Invalid CAA tag value ("{rdata.tag.decode('utf-8')}") encountered; full CAA record: {rdata.to_text()}')
+                        logging.error(f'Invalid CAA tag value ({rdata.tag.decode('utf-8')}) encountered; full CAA record: {rdata.to_text()}')
+                        warnings.append(f'&emsp;&emsp;▶ Invalid CAA tag value ("<code>{rdata.tag.decode('utf-8')}</code>") encountered.')
                         continue
                     else:
                         if rdata.tag.decode('utf-8') == 'issue':
@@ -113,7 +117,8 @@ def check_caa_per_domain(config, domain: str, ca_identifiers: list[str]) -> tupl
                                 if ca in ca_entry:    # Important to use 'in' since issue tags can have extension properties specified by Certification Authory.
                                     if etld:
                                         logging.error(f'Authorizing wildcard CAA record (<code>{ca}</code>) *only* found at .{check_domain} eTLD!')    
-                                        return True, f"&emsp;&nbsp;&nbsp;&nbsp;Wildcard CAA record ({ca}) <u>only</u> found at <b>.{check_domain}</b> eTLD!", records_found
+                                        warnings.append(f"&emsp;&emsp;▶ Wildcard CAA record ({ca}) <u>only</u> found at <b>.{check_domain}</b> eTLD!")
+                                        return True, "<br>".join(warnings), records_found
                                     logging.warning(f"SUCCESS: Wildcard CA from mapping ({ca}) matched CAA record published at {check_domain}.")
                                     return True, None, records_found
                     
@@ -132,10 +137,11 @@ def check_caa_per_domain(config, domain: str, ca_identifiers: list[str]) -> tupl
                         for ca_entry in issue_properties:
                             if ca in ca_entry:    # Note: Important to use 'in' since issue tags can have extension properties specified by Certification Authory.
                                 if etld:
-                                    logging.error(f"Authorizing CAA record ({ca}) only found at .{check_domain} eTLD!")    
-                                    return True, f'&emsp;&emsp;▶ Matching CAA record (<code>{ca}</code>) <em>only</em> found at <b>.{check_domain}</b> eTLD!', records_found
+                                    logging.error(f"Authorizing CAA record ({ca}) only found at .{check_domain} eTLD!")
+                                    warnings.append(f'&emsp;&emsp;▶ Matching CAA record (<code>{ca}</code>) <em>only</em> found at <b>.{check_domain}</b> eTLD!')
+                                    return True, "<br>".join(warnings), records_found
                                 logging.warning(f"SUCCESS: CA from mapping ({ca}) matched CAA record published at {check_domain}.")
-                                return True, None, records_found
+                                return True, warnings, records_found
 
         else:  # No answer rdata retrieved from CAA query
             logging.info(f'No published CAA record found at {check_domain}.')
@@ -144,11 +150,13 @@ def check_caa_per_domain(config, domain: str, ca_identifiers: list[str]) -> tupl
     # Exhausted CAA record search for DNS tree.  If CAA records found, but no matches for Issuing CA of leaf certificate, return warning.
     if is_wildcard and issuewild_properties:
         logging.error(f"Published 'issuewild' CAA records do not authorize Issuing CA of wildcard leaf cert!")
-        return False, f"&emsp;&emsp;▶ Wildcard CAA records do not authorize CA for wildcard site certificate.", records_found
+        warnings.append(f"&emsp;&emsp;▶ Wildcard CAA records do not authorize CA for wildcard site certificate.")
+        return False, "<br>".join(warnings), records_found
     
     if issue_properties:
         logging.error(f"Published 'issue' CAA records do not authorize Issuing CA for leaf cert!")
-        return False, f"&emsp;&emsp;▶ CAA records do not authorize CA for site certificate.", records_found
+        warnings.append(f"&emsp;&emsp;▶ CAA records do not authorize CA for site certificate.")
+        return False, "<br>".join(warnings), records_found
 
     # No CAA records found at all
     logging.warning(f'No published CAA record found; return true per RFC8659')

@@ -1,11 +1,11 @@
 import logging
-from certguard_config import Config
+from config.certguard_config import Config
+from checks.chain_builder import normalize_chain
+from checks.revocation_logic import validate_ocsp_signature
+from cryptography.x509 import ocsp, UnrecognizedExtension, Certificate
 from mitmproxy import tls
 from mitmproxy.addons.tlsconfig import TlsConfig
 from OpenSSL import SSL
-from cryptography.x509 import ocsp, UnrecognizedExtension, Certificate
-from chain_builder import normalize_chain
-from revocation_logic import validate_ocsp_signature
 
 config = Config()
 

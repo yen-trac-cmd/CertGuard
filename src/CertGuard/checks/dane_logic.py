@@ -1,20 +1,20 @@
 import dns
 import dns.edns
 import dns.exception
-import dns.rcode    
 import dns.message
 import dns.query
+import dns.rcode    
 import dns.rdatatype
 import hashlib
 import logging
-from certguard_config import Config
+from config.certguard_config import Config
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from enum import IntEnum
-from helper_functions import get_ede_description, chain_terminates_in_root
-#from chain_builder import verify_signature
-from mitmproxy import connection 
+from checks.helper_functions import chain_terminates_in_root # get_ede_description, 
 from typing import Optional, Tuple
+from mitmproxy import connection 
+from utils.misc import get_ede_description
 
 config = Config()
 

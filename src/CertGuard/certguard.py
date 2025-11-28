@@ -130,6 +130,7 @@ def request(flow: http.HTTPFlow) -> None:
             # Copy OCSP strings to flow metadata
             flow.metadata.update(ocsp_addon.ocsp_by_connection[conn_id])
             logging.debug(f"[OCSP] Attached OCSP data to flow for {flow.request.pretty_host}")
+            findings.append(Finding(DisplayLevel.VERBOSE, func_name(), f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;Stapled OCSP report included in TLS negotiation.'))
             
             # Retrieve any SCT extensions attached to stapled OCSP responses
             if ocsp_addon.ocsp_sct_list:

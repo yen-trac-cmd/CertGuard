@@ -1,8 +1,8 @@
 {
-  "created_at": "2025-11-27T00:02:49.659162+00:00",
-  "elapsed": 0.075163,
+  "created_at": "2025-11-28T00:10:21.552382+00:00",
+  "elapsed": 1.443575,
   "encoding": "UTF-8",
-  "expires": "2025-11-28T00:02:49.659112+00:00",
+  "expires": "2025-11-29T00:10:21.552333+00:00",
   "headers": {
     "Accept-Ranges": "bytes",
     "Access-Control-Allow-Origin": "*",
@@ -10,14 +10,14 @@
     "Cache-Control": "public, max-age=3000",
     "Content-Disposition": "attachment; filename=\"log_list.json\"",
     "Content-Encoding": "br",
-    "Content-Length": "9643",
+    "Content-Length": "9650",
     "Content-Security-Policy": "require-trusted-types-for 'script'; report-uri https://csp.withgoogle.com/csp/cert-log-ninjas",
     "Content-Type": "application/json; charset=UTF-8",
     "Cross-Origin-Opener-Policy": "same-origin; report-to=\"cert-log-ninjas\"",
     "Cross-Origin-Resource-Policy": "cross-origin",
-    "Date": "Thu, 27 Nov 2025 00:02:49 GMT",
-    "Expires": "Thu, 27 Nov 2025 00:52:49 GMT",
-    "Last-Modified": "Wed, 26 Nov 2025 14:57:15 GMT",
+    "Date": "Fri, 28 Nov 2025 00:10:21 GMT",
+    "Expires": "Fri, 28 Nov 2025 01:00:21 GMT",
+    "Last-Modified": "Thu, 27 Nov 2025 14:32:22 GMT",
     "Report-To": "{\"group\":\"cert-log-ninjas\",\"max_age\":2592000,\"endpoints\":[{\"url\":\"https://csp.withgoogle.com/csp/report-to/cert-log-ninjas\"}]}",
     "Server": "sffe",
     "Vary": "Accept-Encoding",
@@ -31,7 +31,7 @@
       "Accept": "*/*",
       "Accept-Encoding": "gzip, deflate, br, zstd",
       "Connection": "keep-alive",
-      "If-Modified-Since": "Mon, 24 Nov 2025 15:00:15 GMT",
+      "If-Modified-Since": "Wed, 26 Nov 2025 14:57:15 GMT",
       "User-Agent": "python-requests/2.32.3"
     },
     "method": "GET",
@@ -40,8 +40,8 @@
   "status_code": 200,
   "url": "https://www.gstatic.com/ct/log_list/v3/log_list.json",
   "_decoded_content": {
-    "version": "75.7",
-    "log_list_timestamp": "2025-11-26T12:54:29Z",
+    "version": "76.1",
+    "log_list_timestamp": "2025-11-27T12:53:56Z",
     "operators": [
       {
         "name": "Google",
@@ -791,8 +791,8 @@
             "monitoring_url": "https://mon.sycamore.ct.letsencrypt.org/2025h2d/",
             "mmd": 60,
             "state": {
-              "qualified": {
-                "timestamp": "2025-09-17T03:00:00Z"
+              "usable": {
+                "timestamp": "2025-11-27T03:00:00Z"
               }
             },
             "temporal_interval": {
@@ -808,8 +808,8 @@
             "monitoring_url": "https://mon.sycamore.ct.letsencrypt.org/2026h1/",
             "mmd": 60,
             "state": {
-              "qualified": {
-                "timestamp": "2025-09-17T03:00:00Z"
+              "usable": {
+                "timestamp": "2025-11-27T03:00:00Z"
               }
             },
             "temporal_interval": {
@@ -825,8 +825,8 @@
             "monitoring_url": "https://mon.sycamore.ct.letsencrypt.org/2026h2/",
             "mmd": 60,
             "state": {
-              "qualified": {
-                "timestamp": "2025-09-17T03:00:00Z"
+              "usable": {
+                "timestamp": "2025-11-27T03:00:00Z"
               }
             },
             "temporal_interval": {
@@ -842,8 +842,8 @@
             "monitoring_url": "https://mon.sycamore.ct.letsencrypt.org/2027h1/",
             "mmd": 60,
             "state": {
-              "qualified": {
-                "timestamp": "2025-09-17T03:00:00Z"
+              "usable": {
+                "timestamp": "2025-11-27T03:00:00Z"
               }
             },
             "temporal_interval": {
@@ -859,8 +859,8 @@
             "monitoring_url": "https://mon.sycamore.ct.letsencrypt.org/2027h2/",
             "mmd": 60,
             "state": {
-              "qualified": {
-                "timestamp": "2025-09-17T03:00:00Z"
+              "usable": {
+                "timestamp": "2025-11-27T03:00:00Z"
               }
             },
             "temporal_interval": {
@@ -876,8 +876,8 @@
             "monitoring_url": "https://mon.willow.ct.letsencrypt.org/2025h2d/",
             "mmd": 60,
             "state": {
-              "qualified": {
-                "timestamp": "2025-09-17T03:00:00Z"
+              "usable": {
+                "timestamp": "2025-11-27T03:00:00Z"
               }
             },
             "temporal_interval": {
@@ -893,8 +893,8 @@
             "monitoring_url": "https://mon.willow.ct.letsencrypt.org/2026h1/",
             "mmd": 60,
             "state": {
-              "qualified": {
-                "timestamp": "2025-09-17T03:00:00Z"
+              "usable": {
+                "timestamp": "2025-11-27T03:00:00Z"
               }
             },
             "temporal_interval": {
@@ -910,8 +910,8 @@
             "monitoring_url": "https://mon.willow.ct.letsencrypt.org/2026h2/",
             "mmd": 60,
             "state": {
-              "qualified": {
-                "timestamp": "2025-09-17T03:00:00Z"
+              "usable": {
+                "timestamp": "2025-11-27T03:00:00Z"
               }
             },
             "temporal_interval": {
@@ -927,8 +927,8 @@
             "monitoring_url": "https://mon.willow.ct.letsencrypt.org/2027h1/",
             "mmd": 60,
             "state": {
-              "qualified": {
-                "timestamp": "2025-09-17T03:00:00Z"
+              "usable": {
+                "timestamp": "2025-11-27T03:00:00Z"
               }
             },
             "temporal_interval": {
@@ -944,8 +944,8 @@
             "monitoring_url": "https://mon.willow.ct.letsencrypt.org/2027h2/",
             "mmd": 60,
             "state": {
-              "qualified": {
-                "timestamp": "2025-09-17T03:00:00Z"
+              "usable": {
+                "timestamp": "2025-11-27T03:00:00Z"
               }
             },
             "temporal_interval": {
@@ -1272,8 +1272,8 @@
             "monitoring_url": "https://gouda2025h2.mon.ct.ipng.ch/",
             "mmd": 60,
             "state": {
-              "qualified": {
-                "timestamp": "2025-09-17T03:00:00Z"
+              "usable": {
+                "timestamp": "2025-11-27T03:00:00Z"
               }
             },
             "temporal_interval": {
@@ -1289,8 +1289,8 @@
             "monitoring_url": "https://gouda2026h1.mon.ct.ipng.ch/",
             "mmd": 60,
             "state": {
-              "qualified": {
-                "timestamp": "2025-09-17T03:00:00Z"
+              "usable": {
+                "timestamp": "2025-11-27T03:00:00Z"
               }
             },
             "temporal_interval": {
@@ -1306,8 +1306,8 @@
             "monitoring_url": "https://gouda2026h2.mon.ct.ipng.ch/",
             "mmd": 60,
             "state": {
-              "qualified": {
-                "timestamp": "2025-09-17T03:00:00Z"
+              "usable": {
+                "timestamp": "2025-11-27T03:00:00Z"
               }
             },
             "temporal_interval": {
@@ -1323,8 +1323,8 @@
             "monitoring_url": "https://gouda2027h1.mon.ct.ipng.ch/",
             "mmd": 60,
             "state": {
-              "qualified": {
-                "timestamp": "2025-09-17T03:00:00Z"
+              "usable": {
+                "timestamp": "2025-11-27T03:00:00Z"
               }
             },
             "temporal_interval": {
@@ -1340,8 +1340,8 @@
             "monitoring_url": "https://gouda2027h2.mon.ct.ipng.ch/",
             "mmd": 60,
             "state": {
-              "qualified": {
-                "timestamp": "2025-09-17T03:00:00Z"
+              "usable": {
+                "timestamp": "2025-11-27T03:00:00Z"
               }
             },
             "temporal_interval": {

@@ -96,7 +96,7 @@ def root_country_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) 
         violation = f"⚠️ The {ca_type} certificate lists an invalid two-letter country code: <b>{ca_country}</b>"
         return ErrorLevel.CRIT, Finding(DisplayLevel.WARNING, func_name(), violation)
 
-    violation = f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;Root CA Country: {country_name}'        
+    violation = f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;Root CA Country: {country_name}.'
     return ErrorLevel.NONE, Finding(DisplayLevel.VERBOSE, func_name(), violation)
 
 def controlled_CA_checks(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Tuple[ErrorLevel, Optional[Finding]]:
@@ -196,12 +196,16 @@ def revocation_checks(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -
     
     # Check for OCSP data in flow metadata
     skip_leaf = False
-    if flow.metadata.get("ocsp_signature_valid") and flow.metadata.get("ocsp_cert_status") == "GOOD":
-        # If stapled OCSP response attached to flow, skip_leaf argument to check_cert_chain_revocation() will skip revocation checking for leaf cert.
-        skip_leaf = True
-        findings.append(f'✅ Clean OCSP report for leaf cert stapled to TLS session negotiation.')
+    stapled_response = False
+    if flow.metadata.get("ocsp_response"):
+        stapled_response = flow.metadata.get("ocsp_response")
+    
+    #if flow.metadata.get("ocsp_signature_valid") and flow.metadata.get("ocsp_cert_status") == "GOOD":
+    #    # If stapled OCSP response attached to flow, skip_leaf argument to check_cert_chain_revocation() will skip revocation checking for leaf cert.
+    #    skip_leaf = True
+    #    findings.append(f'✅ Clean OCSP report for leaf cert stapled to TLS session negotiation.')
 
-    is_revoked, error = check_cert_chain_revocation(cert_chain, skip_leaf)
+    is_revoked, error = check_cert_chain_revocation(cert_chain, skip_leaf, stapled_response)
 
     if is_revoked:
         logging.error(f'One or more certificates REVOKED!')
@@ -236,33 +240,44 @@ def identity_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> T
         cn = cn_attrs[0].value if cn_attrs else cert.subject.rfc4514_string() or "(no subject)"
         subject_missing = not cert.subject or len(cert.subject) == 0
         san_missing = False
+        san_missing_dns = False
 
         # Only check SAN for the leaf certificate
         if i == 1:
             try:
                 san_ext = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
-                san_entries = san_ext.value.get_values_for_type(x509.DNSName)
-                san_missing = len(san_entries) == 0
+                san_dns_entries = san_ext.value.get_values_for_type(x509.DNSName)
+                san_ip_entries = san_ext.value.get_values_for_type(x509.IPAddress)
+                if san_ip_entries:
+                    logging.warning(f'SubAltName IP Address entries identified: {san_ip_entries}')
+                san_missing_dns = len(san_dns_entries) == 0
             except x509.ExtensionNotFound:
                 san_missing = True
 
         # Collect any violations
-        if subject_missing or san_missing:
+        if subject_missing or san_missing or san_missing_dns:
             logging.error(
                 f"{label} ({cn}) is missing "
                 f"{'subject' if subject_missing else ''}"
-                f"{' and ' if subject_missing and san_missing else ''}"
-                f"{'SAN' if san_missing else ''}."
+                f"{' and ' if subject_missing and (san_missing or san_missing_dns) else ''}"
+                f"{'SAN' if san_missing else ''}"
+                f"{'SAN entry with DNS Name entries' if san_missing_dns else ''}"
             )
 
             if subject_missing and san_missing:
-                violations.append(f'&emsp;&emsp;▶ {label} <code>{cn}</code> missing both Subject and SAN fields.')
+                violations.append(f'&emsp;&emsp;▶ {label} <code>{cn}</code> is missing both Subject and SubAltName (SAN) extension.')
+                error_level = ErrorLevel.CRIT
+            elif subject_missing and san_missing_dns:
+                violations.append(f'&emsp;&emsp;▶ {label} <code>{cn}</code> is missing both Subject and SubAltName with DNS Name entries.')
                 error_level = ErrorLevel.CRIT
             elif subject_missing:
-                violations.append(f'&emsp;&emsp;▶ {label} <code>{cn}</code> missing Subject field.')
+                violations.append(f'&emsp;&emsp;▶ {label} <code>{cn}</code> is missing Subject field.')
                 error_level = ErrorLevel.NOTICE
             elif san_missing:
-                violations.append(f'&emsp;&emsp;▶ {label} <code>{cn}</code> missing Subject Alternative Name (SAN).')
+                violations.append(f'&emsp;&emsp;▶ {label} <code>{cn}</code> is missing SubAltName (SAN).')
+                error_level = ErrorLevel.WARN
+            elif san_missing_dns:
+                violations.append(f'&emsp;&emsp;▶ {label} <code>{cn}</code> is missing SubAltName (SAN) with DNS Name entries.')
                 error_level = ErrorLevel.WARN
 
     # Confirm FQDN(s) in leaf cert
@@ -413,7 +428,7 @@ def sct_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Tuple[
         # TODO: Update code to account for external SCTs (e.g. delivered via OCSP or during TLS negotation).  Although these
         # alternative SCT delivery methods are exceedingly rare, this check should not result in FATAL errors until those methods are added.
         logging.error(f"Cert for {flow.request.pretty_url} missing SCT(s)!")
-        violation = '⚠️ Certificate missing <a href=https://certificate.transparency.dev/howctworks/ target="_blank">Signed Certificate Timestamps</a> (SCTs)'
+        violation = '⚠️ Certificate missing <a href=https://certificate.transparency.dev/howctworks/ target="_blank">Signed Certificate Timestamps</a> (SCTs).'
         return ErrorLevel.ERROR, Finding(DisplayLevel.WARNING, func_name(), violation)
     
     # Print out SCT details for debugging purposes

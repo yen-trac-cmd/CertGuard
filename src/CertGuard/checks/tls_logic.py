@@ -105,11 +105,11 @@ class OCSPStaplingConfig(TlsConfig):
         
         if ocsp_resp.response_status == ocsp.OCSPResponseStatus.SUCCESSFUL:
             # Validate the OCSP response signature
-            signature_valid = validate_ocsp_signature(ocsp_resp, cert_chain)
+            #signature_valid = validate_ocsp_signature(ocsp_resp, cert_chain)
             # Store serializable data
             if conn_id in self.ocsp_by_connection:
                 self.ocsp_by_connection[conn_id]["ocsp_response"] = ocsp_data
-                self.ocsp_by_connection[conn_id]["ocsp_signature_valid"] = signature_valid
+                #self.ocsp_by_connection[conn_id]["ocsp_signature_valid"] = signature_valid
                 '''
                 self.ocsp_by_connection[conn_id]["ocsp_cert_status"] = ocsp_resp.certificate_status.name
                 self.ocsp_by_connection[conn_id]["ocsp_this_update"] = ocsp_resp.this_update_utc.isoformat()

@@ -68,11 +68,11 @@ def check_cert_chain_revocation(cert_chain: list[x509.Certificate], skip_leaf: b
         if is_revoked:
             revoked = True
             logging.error(f'Cert #{i} ({cn}) is revoked per {method}. \nReason: {reason}')
-            all_errors.append(f"<br>&emsp;&emsp;▶ Cert #{i} (<code>{cn}</code>) is revoked per {method}<br>&emsp;&emsp;<b>Reason:</b> {reason}")
+            all_errors.append(f"<br>&emsp;&emsp;▶ Cert #{i} (<code>{cn}</code>) is revoked per {method}<br>&emsp;&emsp;<b>Reason:</b> {reason}") #########
         
         if error:
-            logging.error(f'Error encountered checking cert #{i} ({cn}): {error}')
-            all_errors.append(f"⚠️ Error encountered checking cert #{i} (<code>{cn}</code>):<br>&emsp;&emsp;▶ {error}")
+            logging.error(f'Error(s) encountered checking cert #{i} ({cn}): {error}')
+            all_errors.append(f"⚠️ Error while checking revocation for cert #{i} (<code>{cn}</code>):<br>&emsp;&emsp;▶ {error}")
     
     # If we checked all certs and none were revoked
     if not all_errors and not revoked:
@@ -106,11 +106,11 @@ def check_cert_revocation(cert: x509.Certificate, issuer_cert: x509.Certificate,
     crl_result = None
     ocsp_result = None
     errors = []
-    return_msg = None
+    return_msg: str = None
     # Try OCSP first
     try:
         if stapled_response:   # Check for stapled response before attempting to perform online status query
-            logging.debug('Stapled response identified.')
+            logging.debug('Attempting to verify against stapled OCSP response.')
             ocsp_result, return_msg = _check_ocsp(cert, issuer_cert, cert_chain, stapled_response)
         else:
             ocsp_urls = _get_ocsp_urls(cert)
@@ -118,20 +118,14 @@ def check_cert_revocation(cert: x509.Certificate, issuer_cert: x509.Certificate,
             if ocsp_urls:
                 ocsp_result, return_msg = _get_ocsp(cert, issuer_cert, cert_chain, ocsp_urls, timeout)
     except Exception as e:
-        logging.error('0000000000000000000000000000000000')
         errors.append(f"OCSP check failed: {str(e)}")
 
-    logging.error('1111111111111111111111111111')
     if ocsp_result is True:  # Explicitly revoked
-        logging.error('11112222222222222222222222222222')
         return (True, "", return_msg, "OCSP")
     elif ocsp_result is False:  # Explicitly not revoked
-        logging.error('333333333333333333333333333333333')
         return (False, "", None, None)
     else:
-        logging.error('44444444444444444444444444444444444')
-        errors.append(f"OCSP check returned: {return_msg}")
-        logging.error(errors)
+        errors.append(return_msg)
     
     # Try CRL as fallback
     logging.info('Unable to check revocation via OCSP; falling back to CRL (if CDP present).')
@@ -196,16 +190,6 @@ def _get_crl_revocation_reason(revoked_cert) -> Optional[str]:
         logging.error(f"Unexpected error in _get_crl_revocation_reason: {e}")
         return "UNSPECIFIED"
 
-def _get_ocsp_revocation_reason(ocsp_resp) -> Optional[str]:
-    """Extract revocation reason from an OCSP response."""
-    try:
-        # OCSP responses may include revocation reason in extensions
-        if hasattr(ocsp_resp, 'revocation_reason') and ocsp_resp.revocation_reason:
-            return ocsp_resp.revocation_reason.name
-        return "UNSPECIFIED"
-    except Exception:
-        return None
-
 def _get_ocsp_urls(cert: x509.Certificate) -> list:
     """Extract OCSP URLs from certificate's Authority Information Access extension."""
     try:
@@ -234,6 +218,7 @@ def _get_crl_urls(cert: x509.Certificate) -> list:
         logging.debug(f'Extracted CRL Distribution Point (CDP) server(s) from cert: {urls}')
         return urls
     except x509.ExtensionNotFound:
+        logging.warning('No CRL Distribution Point URLs identified.')
         return []
 
 def _get_ocsp(cert: x509.Certificate, issuer_cert: x509.Certificate, cert_chain: list[x509.Certificate], ocsp_urls: list, timeout: int ) -> Tuple[Optional[bool], Optional[str]]:
@@ -268,7 +253,7 @@ def _get_ocsp(cert: x509.Certificate, issuer_cert: x509.Certificate, cert_chain:
 
         except RequestException as e:
             exception_msg = f"Error querying <code>{url}</code>."
-            logging.error(exception_msg + f':\n --> {e}')
+            logging.error(f'Exception encountered: {e}')
             exception_messages.append(exception_msg)
             continue
 
@@ -283,11 +268,14 @@ def _get_ocsp(cert: x509.Certificate, issuer_cert: x509.Certificate, cert_chain:
             logging.error(error_msg)
             exception_messages.append(error_msg)
             continue
+        
         else: # response.status_code == 200:
             revoked, return_msg = _check_ocsp(cert, issuer_cert, cert_chain, response.content)
-            exception_messages.append(return_msg)
-            return revoked, exception_messages
-
+            #exception_messages.append(return_msg)
+            return revoked, return_msg
+    
+    # Fall through
+    return None, exception_messages
         
 def _check_ocsp(cert: x509.Certificate, issuer_cert: x509.Certificate, cert_chain: list[x509.Certificate], ocsp_response ) -> Tuple[Optional[bool], Optional[str]]:
     """
@@ -297,10 +285,7 @@ def _check_ocsp(cert: x509.Certificate, issuer_cert: x509.Certificate, cert_chai
     logging.warning(f"-----------------------------------Entering _check_ocsp()-----------------------------------------")
     
     try:
-        logging.error('xxxxxxxxxxxxxxxxxxxxxxxx')
         ocsp_resp = ocsp.load_der_ocsp_response(ocsp_response)
-        
-        logging.error('yyyyyyyyyyyyyyyyyyyyyyyyyyyy')
     except ValueError as e:
         exception_msg = f"Error parsing OCSP response: {e}"
         logging.error(exception_msg)
@@ -309,12 +294,11 @@ def _check_ocsp(cert: x509.Certificate, issuer_cert: x509.Certificate, cert_chai
         exception_msg = f"Error parsing OCSP response: {e}"
         logging.error(exception_msg)
         return None, exception_msg
-    logging.error('zzzzzzzzzzzzzzzzzzzzzzzzzzzzz')
 
     if ocsp_resp.response_status == ocsp.OCSPResponseStatus.SUCCESSFUL:
         logging.debug("The OCSP request was successful.")
     elif ocsp_resp.response_status == ocsp.OCSPResponseStatus.UNAUTHORIZED:
-        error_msg = f"The OCSP responder is unauthorized to respond for check against {cert.subject.rfc4514_string()}; skipping server."
+        error_msg = f"The OCSP responder is unauthorized to respond."
         logging.error(error_msg)
         return None, error_msg
     elif ocsp_resp.response_status == ocsp.OCSPResponseStatus.MALFORMED_REQUEST:
@@ -325,25 +309,29 @@ def _check_ocsp(cert: x509.Certificate, issuer_cert: x509.Certificate, cert_chai
         error_msg = f"A non-successful OCSP status response was received: {ocsp_resp.response_status.name}; skipping server."
         logging.error(error_msg)
         return None, error_msg
-    ocsp_resp.responses.__iter__
+    
     # Log info about cert being checked & OCSP response data for debugging purposes
     logging.debug("OCSP Response Details:")
-    for single_resp in ocsp_resp.response_iter():  #############################################################################
-        
-        logging.debug(" Single Response")
-        logging.debug(f" - Cert Serial Number:  {single_resp.serial_number}")
-        logging.debug(f" - Serial Number (Hex): {hex(single_resp.serial_number)}")
-        logging.debug(f" - Certificate Status:  {single_resp.certificate_status.name}")
-        logging.debug(f" - This Update:         {single_resp.this_update_utc}")
-        logging.debug(f" - Next Update:         {single_resp.next_update_utc}")
-        
+    
+    single_responses = ocsp_resp.responses
+    
+    #logging.debug(f'Number of single certificate responses inside OCSP response: {len(single_responses)}')    
+    matched_single_resp = None
+
+    for single_resp in single_responses:
         if single_resp.serial_number == cert.serial_number:
+            logging.debug("Matched Single Response")
+            logging.debug(f" - Cert Serial Number:  {single_resp.serial_number}")
+            logging.debug(f" - Serial Number (Hex): {hex(single_resp.serial_number)}")
+            logging.debug(f" - Certificate Status:  {single_resp.certificate_status.name}")
+            logging.debug(f" - This Update:         {single_resp.this_update_utc}")
+            logging.debug(f" - Next Update:         {single_resp.next_update_utc}")
             matched_single_resp = single_resp
 
         if single_resp.certificate_status == ocsp.OCSPCertStatus.REVOKED:
             logging.debug(f" - Revocation Time:     {single_resp.revocation_time_utc}")
             if single_resp.revocation_reason:
-                logging.debug(f" - Revocation Reason:   {single_resp.revocation_reason}")
+                logging.debug(f" - Revocation Reason:   {single_resp.revocation_reason.name}")
             else:
                 logging.debug(" - Revocation Reason:   Unspecified")
 
@@ -373,14 +361,18 @@ def _check_ocsp(cert: x509.Certificate, issuer_cert: x509.Certificate, cert_chai
         error_msg = f'Digitial signature verification on OCSP response failed.'
         logging.error(error_msg)
         return None, error_msg
-
     cert_status = matched_single_resp.certificate_status
     if cert_status == ocsp.OCSPCertStatus.GOOD:
         logging.info('Certificate OCSP revocation check returned status: GOOD.')
         return (False, None)
     elif cert_status == ocsp.OCSPCertStatus.REVOKED:
         # Try to get revocation reason
-        reason = _get_ocsp_revocation_reason(matched_single_resp)
+        #reason = _get_ocsp_revocation_reason(matched_single_resp)
+        #logging.error(f'type for reason at first...: {type(reason)}')
+        try:
+            reason = matched_single_resp.revocation_reason.name
+        except Exception:
+            reason = "UNSPECIFIED"
         logging.error(f'Certificate confirmed REVOKED via OCSP check due to: {reason}')
         return (True, reason)
     else: # UNKNOWN status - try next URL

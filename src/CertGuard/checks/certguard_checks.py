@@ -195,17 +195,17 @@ def revocation_checks(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -
         return ErrorLevel.NONE, None
     
     # Check for OCSP data in flow metadata
-    skip_leaf = False
+    #skip_leaf = False
     stapled_response = False
-    if flow.metadata.get("ocsp_response"):
-        stapled_response = flow.metadata.get("ocsp_response")
+    if flow.metadata.get("ocsp_response_bytes"):
+        stapled_response = flow.metadata.get("ocsp_response_bytes")
     
     #if flow.metadata.get("ocsp_signature_valid") and flow.metadata.get("ocsp_cert_status") == "GOOD":
     #    # If stapled OCSP response attached to flow, skip_leaf argument to check_cert_chain_revocation() will skip revocation checking for leaf cert.
     #    skip_leaf = True
     #    findings.append(f'✅ Clean OCSP report for leaf cert stapled to TLS session negotiation.')
 
-    is_revoked, error = check_cert_chain_revocation(cert_chain, skip_leaf, stapled_response)
+    is_revoked, error = check_cert_chain_revocation(cert_chain, stapled_response)
 
     if is_revoked:
         logging.error(f'One or more certificates REVOKED!')

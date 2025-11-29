@@ -105,6 +105,8 @@ def load(loader: addonmanager.Loader) -> None:
     logging.warning(f"===> Reloaded CertGuard Addon")
 
 def request(flow: http.HTTPFlow) -> None:
+    """CertGuard Hook for mitmproxy request()"""
+    logging.info('===================================BEGIN New HTTP Request=========================================')
     findings:list[Finding]=[]
     highest_error_level = ErrorLevel.NONE.value
     host = flow.request.pretty_host
@@ -129,7 +131,7 @@ def request(flow: http.HTTPFlow) -> None:
         if conn_id in ocsp_addon.ocsp_by_connection:
             # Copy OCSP strings to flow metadata
             flow.metadata.update(ocsp_addon.ocsp_by_connection[conn_id])
-            logging.debug(f"[OCSP] Attached OCSP data to flow for {flow.request.pretty_host}")
+            logging.debug(f"Attached stapled OCSP data to flow metadata for {flow.request.pretty_host}")
             findings.append(Finding(DisplayLevel.VERBOSE, func_name(), f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;Stapled OCSP report included in TLS negotiation.'))
             
             # Retrieve any SCT extensions attached to stapled OCSP responses
@@ -139,13 +141,14 @@ def request(flow: http.HTTPFlow) -> None:
                     logging.debug(f"SCT extension found in stapled OCSP response: {stapled_sct}")
                     del ocsp_addon.stapled_sct[conn_id]
                     
-                    # Return during hunt for any website using stapled SCTs in OCSP response.
-                    finding = f'Found SCT in stapled OCSP response for <b>{flow.request.pretty_url}!!</b>.'
+                    # Raise level-6 blockpage during hunt for *any* website using stapled SCTs in OCSP response.
+                    finding = f'🎉 Found SCT in stapled OCSP response for <b>{flow.request.pretty_url}</b>!!'
                     findings.append(Finding(DisplayLevel.WARNING, func_name(), finding))
+                    highest_error_level = ErrorLevel.FATAL.value
                     #error_screen(config, flow, None, ErrorLevel.FATAL.color, [finding], ErrorLevel.FATAL.value)
 
-                    # TODO: If ever encounter real-life SCT in stapled OCSP response, pass into Certificate Transparency 
-                    # module ("ct") for signature validation & inclusion proofing.
+                    # TODO: If ever encounter real-life SCT in stapled OCSP response, pass into ct_logic module
+                    # for signature validation & inclusion proofing.
 
             # Clean up temporary storage
             del ocsp_addon.ocsp_by_connection[conn_id]

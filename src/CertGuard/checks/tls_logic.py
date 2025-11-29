@@ -1,8 +1,8 @@
 import logging
 from config.certguard_config import Config
-from checks.chain_builder import normalize_chain
-from checks.revocation_logic import validate_ocsp_signature
-from cryptography.x509 import ocsp, UnrecognizedExtension, Certificate
+#from checks.chain_builder import normalize_chain
+#from checks.revocation_logic import validate_ocsp_signature
+from cryptography.x509 import ocsp  #, UnrecognizedExtension, Certificate
 from mitmproxy import tls
 from mitmproxy.addons.tlsconfig import TlsConfig
 from OpenSSL import SSL
@@ -62,12 +62,9 @@ class OCSPStaplingConfig(TlsConfig):
                             "ocsp_sni": callback_sni
                         }
                         
-                        # Parse and validate the OCSP response
+                        # Parse the OCSP response
                         try:
-                            # Get the server's certificate chain for validation
-                            cert_chain = conn.get_peer_cert_chain(as_cryptography=True)
-                            cert_chain = normalize_chain(cert_chain)
-                            self.parse_and_validate_ocsp_response(ocsp_data, cert_chain[0], conn_id)
+                            self.parse_ocsp_response(ocsp_data, conn_id)
                         except Exception as e:
                             logging.error(f"[OCSP] Failed to parse/validate OCSP response: {e}")
                     
@@ -96,109 +93,55 @@ class OCSPStaplingConfig(TlsConfig):
             self.failed_domains.add(sni)
             logging.warning(f"[OCSP] TLS handshake failed for {sni}, disabling OCSP for this domain")
     
-    def parse_and_validate_ocsp_response(self, ocsp_data: bytes, cert_chain: list[Certificate], conn_id) -> None:
-        """Parse, validate signature, and display OCSP response details"""
-        #try:
+    def parse_ocsp_response(self, ocsp_data: bytes, conn_id) -> None:  #cert_chain: list[Certificate],  #####################
+        """Parse and store select response details"""
         # Parse OCSP response using cryptography library
-        ocsp_resp = ocsp.load_der_ocsp_response(ocsp_data)
-        logging.info(f"[OCSP] Response Status: {ocsp_resp.response_status.name}")
-        
+        try:
+            ocsp_resp = ocsp.load_der_ocsp_response(ocsp_data)
+            logging.info(f"[OCSP] Response Status: {ocsp_resp.response_status.name}")
+        except Exception as e:
+            logging.error(f"[OCSP] Error parsing OCSP response: {e}")
+
         if ocsp_resp.response_status == ocsp.OCSPResponseStatus.SUCCESSFUL:
-            # Validate the OCSP response signature
-            #signature_valid = validate_ocsp_signature(ocsp_resp, cert_chain)
             # Store serializable data
             if conn_id in self.ocsp_by_connection:
-                self.ocsp_by_connection[conn_id]["ocsp_response"] = ocsp_data
-                #self.ocsp_by_connection[conn_id]["ocsp_signature_valid"] = signature_valid
-                '''
-                self.ocsp_by_connection[conn_id]["ocsp_cert_status"] = ocsp_resp.certificate_status.name
-                self.ocsp_by_connection[conn_id]["ocsp_this_update"] = ocsp_resp.this_update_utc.isoformat()
-                if ocsp_resp.next_update_utc:
-                    self.ocsp_by_connection[conn_id]["ocsp_next_update"] = ocsp_resp.next_update_utc.isoformat()
-                self.ocsp_by_connection[conn_id]["ocsp_serial_number"] = str(ocsp_resp.serial_number)
-            
-            if signature_valid:
-                logging.info(f"[OCSP] Signature validation: PASSED")
-            else:
-                logging.error(f"[OCSP] Signature validation: FAILED")
-            
-            
-            # Get certificate status
-            logging.info(f"[OCSP] Certificate Status: {ocsp_resp.certificate_status.name}")
+                self.ocsp_by_connection[conn_id]["ocsp_response_bytes"] = ocsp_data
 
-            # Check revocation reason if revoked
-            if ocsp_resp.certificate_status == ocsp.OCSPCertStatus.REVOKED:
-                logging.info(f"[OCSP] Revocation Time: {ocsp_resp.revocation_time_utc}")
-                if ocsp_resp.revocation_reason:
-                    logging.info(f"[OCSP] Revocation Reason: {ocsp_resp.revocation_reason.name}")
-                else:
-                    logging.info(f"[OCSP] Revocation Reason: Unspecified")
+        # If server returned a single certificate OCSP Response, check for stapled Signed Certificate Timestamp (SCT) extension
+        single_responses = list(ocsp_resp.responses)
+        response_count = len(single_responses)
+        if response_count == 1:
+            logging.debug('Received OCSP response for single certificate')
 
-            # Get timestamps
-            logging.info(f"[OCSP] This Update: {ocsp_resp.this_update_utc}")
-            if ocsp_resp.next_update_utc:
-                logging.info(f"[OCSP] Next Update: {ocsp_resp.next_update_utc}")
-            logging.info(f"[OCSP] Produced at: {ocsp_resp.produced_at_utc} ")
-
-            # Get serial number
-            logging.info(f"[OCSP] Serial Number: {ocsp_resp.serial_number}")
-            
-            # Get responder information
-            if ocsp_resp.responder_name:
-                logging.info(f"[OCSP] Responder Name: {ocsp_resp.responder_name.rfc4514_string()}")
-            if ocsp_resp.responder_key_hash:
-                logging.info(f"[OCSP] Responder Key Hash: {ocsp_resp.responder_key_hash.hex()}")
-            
-            # Get signature algorithm
-            logging.info(f"[OCSP] Signature Hash Algorithm: {ocsp_resp.signature_hash_algorithm.name}")
-            
-            # Check for extensions
+            extensions = None
             try:
                 extensions = ocsp_resp.single_extensions
-                if extensions:
-                    logging.info(f"[OCSP] Found {len(extensions)} extension(s)")
-                    for ext in extensions:
-                        logging.info(f"[OCSP] Extension OID: {ext.oid.dotted_string} ({ext.oid._name if hasattr(ext.oid, '_name') else 'unknown'})")
-                        logging.info(f"[OCSP] Extension Critical: {ext.critical}")
-
-                        # Check for Signed Certificate Timestamp (SCT) extension
-                        if ext.oid.dotted_string == "1.3.6.1.4.1.11129.2.4.5":           # OID for SCT List
-                            logging.info(f"[OCSP] *** Signed Certificate Timestamp (SCT) Extension Found ***")
-                            try:
-                                self.ocsp_by_connection[conn_id]["ocsp_contains_sct"] = True
-                                sct_list = ext.value
-                                logging.info(f"[OCSP] SCT List contains {len(sct_list)} SCT(s).")
-
-                                # Store sct_list for later parsing by CertGuard
-                                self.ocsp_sct_list[conn_id] = sct_list
-                                
-                                # Log SCT values
-                                for i, sct in enumerate(sct_list, 1):
-                                    logging.info(f"[OCSP]   SCT #{i}:")
-                                    logging.info(f"[OCSP]     Version: {sct.version.name}")
-                                    logging.info(f"[OCSP]     Log ID: {sct.log_id.hex()}")
-                                    logging.info(f"[OCSP]     Timestamp: {sct.timestamp}")
-                                    logging.info(f"[OCSP]     Entry Type: {sct.entry_type.name}")
-                            except Exception as e:
-                                logging.warning(f"[OCSP] Could not parse SCT extension: {e}")
-                        else:
-                            # Try to display the extension value
-                            if isinstance(ext.value, UnrecognizedExtension):
-                                value_bytes = ext.value.value
-                            else:
-                                value_bytes = ext.value
-                            logging.info(f"[OCSP] Extension Value: value={repr(value_bytes)}")
-
             except AttributeError:
                 logging.debug("[OCSP] No extensions present in OCSP response")
-            except Exception as e:
-                logging.warning(f"[OCSP] Error parsing OCSP extensions: {e}")
-            
-        logging.info(f"[OCSP] ==========================================")
-        '''
-        #except Exception as e:
-        #    logging.error(f"[OCSP] Error parsing OCSP response: {e}")
-   
+
+            if extensions:
+                #logging.info(f"[OCSP] Found {len(extensions)} extension(s)... checking for stapled SCT.")
+                for ext in extensions:
+                    if ext.oid.dotted_string == "1.3.6.1.4.1.11129.2.4.5":           # OID for SCT List
+                        logging.info(f"[OCSP] *** Signed Certificate Timestamp (SCT) Extension Found ***")
+                        try:
+                            self.ocsp_by_connection[conn_id]["ocsp_contains_sct"] = True
+                            sct_list = ext.value
+                            logging.info(f"[OCSP] SCT List contains {len(sct_list)} SCT(s).")
+
+                            # Store sct_list for later parsing by ct_logic().
+                            self.ocsp_sct_list[conn_id] = sct_list
+                            
+                            # Log SCT values
+                            for i, sct in enumerate(sct_list, 1):
+                                logging.info(f"[OCSP]   SCT #{i}:")
+                                logging.info(f"[OCSP]     Version: {sct.version.name}")
+                                logging.info(f"[OCSP]     Log ID: {sct.log_id.hex()}")
+                                logging.info(f"[OCSP]     Timestamp: {sct.timestamp}")
+                                logging.info(f"[OCSP]     Entry Type: {sct.entry_type.name}")
+                        except Exception as e:
+                            logging.warning(f"[OCSP] Could not parse SCT extension: {e}")
+        
     def tls_established_server(self, data: tls.TlsData) -> None:
         """Called after TLS handshake is complete"""
         

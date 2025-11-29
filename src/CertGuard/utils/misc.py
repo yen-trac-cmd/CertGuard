@@ -1,4 +1,6 @@
 import inspect
+from cryptography.x509 import oid
+from cryptography.hazmat.primitives import hashes
 
 def func_name() -> str:
     return inspect.currentframe().f_back.f_code.co_name
@@ -40,3 +42,51 @@ def get_ede_description(code: int) -> str:
         24: "Invalid Data",
     }
     return EDE_CODES_MAP.get(code, "Unknown EDE Code")
+
+def get_ocsp_oid_name(oid_dotted: str) -> str:
+    """
+    Get a human-readable name for common OCSP extension OIDs.
+    
+    Args:
+        oid_dotted: OID in dotted string format
+        
+    Returns:
+        str: Human-readable name or 'unknown'
+    """
+    oid_names = {
+        '1.3.6.1.5.5.7.48.1.2': 'Nonce',
+        '1.3.6.1.5.5.7.48.1.3': 'CRL References',
+        '1.3.6.1.5.5.7.48.1.6': 'Archive Cutoff',
+        '1.3.6.1.5.5.7.48.1.7': 'Service Locator',
+        '1.3.6.1.4.1.311.21.4': 'CRL Next Publish',  # Microsoft proprietary https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-csra/69c1c13a-e270-49ad-9bc1-a94fe019c8c9
+        # CRL Entry Extensions that can appear in SingleResponse
+        '2.5.29.21': 'CRL Reason',
+        '2.5.29.23': 'Hold Instruction Code',
+        '2.5.29.24': 'Invalidity Date',
+        '2.5.29.29': 'Certificate Issuer',
+    }
+    return oid_names.get(oid_dotted, 'unknown')
+
+def get_hash_algorithm_from_oid(sig_oid):
+    """Map signature algorithm OID to hash algorithm"""
+    # Common signature algorithm OIDs
+    oid_to_hash = {
+        # RSA with SHA-256
+        oid.SignatureAlgorithmOID.RSA_WITH_SHA256: hashes.SHA256(),
+        # RSA with SHA-384
+        oid.SignatureAlgorithmOID.RSA_WITH_SHA384: hashes.SHA384(),
+        # RSA with SHA-512
+        oid.SignatureAlgorithmOID.RSA_WITH_SHA512: hashes.SHA512(),
+        # RSA with SHA-1 (deprecated but still used)
+        oid.SignatureAlgorithmOID.RSA_WITH_SHA1: hashes.SHA1(),
+        # ECDSA with SHA-256
+        oid.SignatureAlgorithmOID.ECDSA_WITH_SHA256: hashes.SHA256(),
+        # ECDSA with SHA-384
+        oid.SignatureAlgorithmOID.ECDSA_WITH_SHA384: hashes.SHA384(),
+        # ECDSA with SHA-512
+        oid.SignatureAlgorithmOID.ECDSA_WITH_SHA512: hashes.SHA512(),
+        # DSA with SHA-256
+        oid.SignatureAlgorithmOID.DSA_WITH_SHA256: hashes.SHA256(),
+    }
+    
+    return oid_to_hash.get(sig_oid)

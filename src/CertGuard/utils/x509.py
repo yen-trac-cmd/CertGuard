@@ -106,7 +106,7 @@ def fetch_issuer_certificate(cert: x509.Certificate, already_fetched_certs:list[
             x509.ExtensionOID.AUTHORITY_INFORMATION_ACCESS
         ).value
     except x509.ExtensionNotFound:
-        logging.warning("No AIA extension found.")
+        logging.warning(f"No AIA extension found in cert: {cert.subject.rfc4514_string()}.")
         return None
 
     ca_issuer_urls = [

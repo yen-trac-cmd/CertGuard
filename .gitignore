@@ -9,6 +9,7 @@ log/*
 *.db
 *.log
 logfile*
+*.testing
 
 # CertGuard ephemeral content
 resources/public_suffix_list.dat/*.json
@@ -20,3 +21,4 @@ test*
 
 # Misc
 .vscode/
+#*.Identifier

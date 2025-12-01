@@ -1,5 +1,3 @@
-#from __init__ import __version__
-#from _version import __version__
 import json
 import logging
 import os
@@ -7,13 +5,14 @@ import sqlite3
 import uuid
 from checks.certguard_checks import dane_validator
 from checks.chain_builder import get_root_cert, normalize_chain
-from checks.helper_functions import clean_error, get_root_store, is_navigation_request, record_decision, supported_ciphers_list #, func_name
+from checks.helper_functions import clean_error, get_root_store, is_navigation_request, record_decision, supported_ciphers_list
 from checks.tls_logic import OCSPStaplingConfig
 from config.certguard_config import BYPASS_PARAM, Config, DisplayLevel, ErrorLevel, Finding, Logger
-from cryptography.x509 import NameOID
+from cryptography.x509 import Certificate, NameOID
 from cryptography.hazmat.primitives import hashes
 from error_screen import error_screen
 from utils.misc import func_name
+from utils.x509 import fetch_issuer_certificate
 from mitmproxy import ctx, http, addonmanager
 from checks.certguard_checks import (
     dane_check,
@@ -106,7 +105,7 @@ def load(loader: addonmanager.Loader) -> None:
 
 def request(flow: http.HTTPFlow) -> None:
     """CertGuard Hook for mitmproxy request()"""
-    logging.info('===================================BEGIN New HTTP Request=========================================')
+    logging.info('═══════════════════════════════════ BEGIN New HTTP Request ═════════════════════════════════════════════════════════')
     findings:list[Finding]=[]
     highest_error_level = ErrorLevel.NONE.value
     host = flow.request.pretty_host
@@ -116,8 +115,8 @@ def request(flow: http.HTTPFlow) -> None:
     if accept_header:
         accept_header = accept_header.lower()
 
-    cert_chain = flow.server_conn.certificate_list
-    if not cert_chain:
+    mitm_cert_chain = flow.server_conn.certificate_list
+    if not mitm_cert_chain:
         logging.info(f'Unencrypted connection; skipping further checks.')
         return
 
@@ -163,29 +162,51 @@ def request(flow: http.HTTPFlow) -> None:
     logging.info(f'====> Method:                    {flow.request.method}')
     logging.info(f'====> Referer:                   {referer_header}')
     logging.info(f'====> Accept:                    {accept_header}')
-    logging.debug(f'====> Leaf cert SubAltName(s):  {", ".join([name.value for name in cert_chain[0].altnames if type(name.value) == str])}')
+    logging.debug(f'====> Leaf cert SubAltName(s):  {", ".join([name.value for name in mitm_cert_chain[0].altnames if type(name.value) == str])}')
 
     if flow.request.pretty_host != flow.request.host:
         logging.error(f"Mismatch between mitmproxy host ({flow.request.host}) and HTTP 'Host' header ({flow.request.pretty_host}).")
 
     # Convert certificate chain to a properly-ordered, de-duplicated list of cryptography.x509.Certificate objects  
     # This step is necessary to compensate for the (many!) misconfigured servers encountered on the Internet
-    cert_chain, errors = normalize_chain([cert.to_cryptography() for cert in cert_chain])
+    cert_chain: list[Certificate]
+    cert_chain, errors = normalize_chain([cert.to_cryptography() for cert in mitm_cert_chain])
     if errors:
         highest_error_level = ErrorLevel.ERROR.value
         findings.append(Finding(DisplayLevel.WARNING, func_name(), errors))
     
-    # Retrieve validated root cert as cryptography.hazmat.bindings._rust.x509.Certificate object.
+    # If chain incomplete, fetch missing intermediate CA certs via AIA chasing
+    root_already_present = False
+    fetched_certs = []
+    top_of_chain = cert_chain[-1]
+    
+    if top_of_chain.subject == top_of_chain.issuer:
+        root_already_present = True
+        highest_error_level = ErrorLevel.ERROR.value
+        findings.append(Finding(DisplayLevel.WARNING, func_name(), f'⚠️ Root certificate included in server-supplied cert chain.'))
+    else:
+        while True:
+            chain_issuer = fetch_issuer_certificate(top_of_chain, fetched_certs)
+            # Skip fetching root; rely on local trust store instead.
+            if chain_issuer == None or chain_issuer.subject == chain_issuer.issuer:
+                break
+            else:
+                logging.warning(f'Fetched missing cert from chain: {chain_issuer.subject.rfc4514_string()}')
+                fetched_certs.append(chain_issuer)
+                top_of_chain = chain_issuer
+
+    if fetched_certs:
+        findings.append(Finding(DisplayLevel.WARNING, func_name(), f'⚠️ Server failed to send complete certificate chain.'))
+        cert_chain.extend(fetched_certs)
+
+    # Retrieve validated root cert as cryptography.x509.Certificate object.
     root_cert, claimed_root, verification_error, self_signed = get_root_cert(cert_chain, root_store)
     if root_cert:
         root_hash = root_cert.fingerprint(hashes.SHA256()).hex()
         # Add root cert to chain (if not already present) for a complete / validated chain
-        if cert_chain[-1].subject == cert_chain[-1].issuer:
-            highest_error_level = ErrorLevel.ERROR.value
-            findings.append(Finding(DisplayLevel.WARNING, func_name(), f'⚠️ Root certificate present in server-supplied cert chain.'))
-        else:
+        if not root_already_present:
             cert_chain.append(root_cert)
-        
+
         # Fetch org name for verbose block pages        
         ca_org = None
         for attr in root_cert.subject.get_attributes_for_oid(NameOID.ORGANIZATION_NAME):

@@ -94,7 +94,7 @@ def get_root_store(custom_roots_dir) -> list[x509.Certificate]:
                 pass
     logging.info(f'Total root certificates loaded: {len(roots)}')
 
-    with open('logs/!trusted_roots.txt', 'w') as f:
+    with open('logs/_trusted_roots.txt', 'w') as f:
         for root in roots:
             f.write(root.subject.rfc4514_string() + '\n')
         logging.info(f'List of trusted roots for this session exported to logs/trusted_roots.txt.')

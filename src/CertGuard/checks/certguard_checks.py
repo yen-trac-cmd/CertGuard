@@ -36,24 +36,28 @@ def root_country_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) 
     """
     logging.warning(f"-----------------------------------Entering root_country_check()----------------------------------")
     
-    # Check for self-signed or unchained certs; no point in checking Country or Org in this case
-    
+    # Check for self-signed certs; no point in checking Country or Org in this case
     if len(cert_chain) == 1:
         # Skip for self-signed
         if cert_chain[0].subject == cert_chain[0].issuer:
+            logging.warning('Skipping root_country_check() for self-signed certificate.')
             return ErrorLevel.NONE, None
         else:    # Best-effort attempt to identify country from issuing CA
+            logging.warning('Unchained certificate; attempting best-effort country enumeration from Issuing CA cert.')
             ca_type = "Issuing"
             ca_cert = cert_chain[0].issuer
-            logging.info(f'{ca_type} certificate subject:      {ca_cert.rfc4514_string()}')
     else:
-        ca_type = "Root"
+        if cert_chain[-1].subject != cert_chain[-1].issuer:
+            logging.warning('Could not identify trusted root CA; best-effort attempt to identify country from Intermediate CA cert.')
+            ca_type = "Intermediate"
+        else:
+            ca_type = "Root"
         ca_cert = cert_chain[-1].subject
-        logging.info(f'{ca_type} certificate subject:      {ca_cert.rfc4514_string()}')
+    
+    logging.info(f'{ca_type} certificate subject:       {ca_cert.rfc4514_string()}')
 
     # Extract country value from CA cert
     ca_country = ca_cert.get_attributes_for_oid(x509.NameOID.COUNTRY_NAME)
-    #logging.warning(f'ca_country = {ca_country},  type = {type(ca_country)}   length = {len(ca_country)}')
     if len(ca_country) == 1:
         ca_country = ca_country[0].value
     
@@ -78,7 +82,7 @@ def root_country_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) 
         violation = f"⛔ Multiple Country (C=) values found in {ca_type} CA cert: <b>{ca_cert.rfc4514_string()}</b>"
         return ErrorLevel.FATAL, Finding(DisplayLevel.CRITICAL, func_name(), violation)
 
-    logging.info(f"Country attribute for {ca_type} CA: {ca_country} ")
+    logging.info(f"Country attribute for {ca_type} CA:  {ca_country} ")
 
     if ca_country in config.blocklist:
         violation = f"⛔ {ca_type} CA is located in a <b style='color:red;'>blocklisted</b> country: <b>{config.iso_country_map[ca_country]}</b>"
@@ -189,22 +193,15 @@ def revocation_checks(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -
     Facade function for performing revocation checking against certificates.
     """
     findings = []
-
     if not config.revocation_checks:
         logging.warning("Skipping revocation checks per 'revocation_checks' configuration directive.")
         return ErrorLevel.NONE, None
     
     # Check for OCSP data in flow metadata
-    #skip_leaf = False
     stapled_response = False
     if flow.metadata.get("ocsp_response_bytes"):
         stapled_response = flow.metadata.get("ocsp_response_bytes")
     
-    #if flow.metadata.get("ocsp_signature_valid") and flow.metadata.get("ocsp_cert_status") == "GOOD":
-    #    # If stapled OCSP response attached to flow, skip_leaf argument to check_cert_chain_revocation() will skip revocation checking for leaf cert.
-    #    skip_leaf = True
-    #    findings.append(f'✅ Clean OCSP report for leaf cert stapled to TLS session negotiation.')
-
     is_revoked, error = check_cert_chain_revocation(cert_chain, stapled_response)
 
     if is_revoked:
@@ -389,8 +386,9 @@ def prior_approval_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]
         
         if quick_check == True:
             logging.info('Performing initial quick check...')
+            logging.debug(f'Existing database record for {host}: {row}')
             if row and row[0] == "approved" and row[1] == root_fingerprint:
-                logging.info(f"Root CA for {host} remains consistent with previously stored record in database; skipping further checks.")
+                logging.info(f"Root CA for {host} remains consistent with previously approved record in database; skipping further checks.")
                 return True
             else:
                 if not row:
@@ -399,10 +397,11 @@ def prior_approval_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]
         
         elif quick_check == False:  # Note - Should never get to this code path on subsequent function call if the earlier check above returned True.
             logging.info('Performing second-pass check for root cert drift in database.')
-            if row and row[0] == "approved" and row[1] != root_fingerprint:
+            #if row and row[0] == "approved" and row[1] != root_fingerprint:
+            if row and row[1] != root_fingerprint:
                 logging.info(f"Root CA for {host} inconsistent with previously observed!")   
-                violation = f"⚠️ Root CA for <b>{host}</b> inconsistent with previously observed!"
-                return ErrorLevel.CRIT, Finding(DisplayLevel.WARNING, func_name(), violation)
+                violation = f"❌ Root CA for <b>{host}</b> inconsistent with previously observed!"
+                return ErrorLevel.CRIT, Finding(DisplayLevel.TOPLEVEL, func_name(), violation)
             logging.info(f"No mismatched root CA records found for {host} in database.")   
         return ErrorLevel.NONE, None   # Assumes no row returned, or consistent root_fingerprint 
 
@@ -606,7 +605,7 @@ def dane_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Tuple
     logging.warning(f"-----------------------------------Entering dane_check()------------------------------------------")
     
     if flow.server_conn.tls:
-        logging.debug(f'Flow Connection:       {flow.server_conn}')
+        logging.debug(f'Flow Connection:         {flow.server_conn}')
         dane_validator.perform_dane_check(flow.server_conn, cert_chain)
         
     logging.debug(f'dane_validator.dnssec_failure: {dane_validator.dnssec_failure}')

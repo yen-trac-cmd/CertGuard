@@ -13,14 +13,14 @@ from urllib3.exceptions import NameResolutionError
 from utils.x509 import fetch_issuer_certificate
 from utils.misc import get_hash_algorithm_from_oid, get_ocsp_oid_name
 
-def check_cert_chain_revocation(cert_chain: list[x509.Certificate], stapled_response, timeout: int = 10) -> Tuple[bool, str, Optional[int], Optional[str], Optional[str]]:
+def check_cert_chain_revocation(cert_chain: list[x509.Certificate], stapled_response: bytes, timeout: int = 10) -> Tuple[bool, str, Optional[int], Optional[str], Optional[str]]:
     """
     Check if any certificate in a chain has been revoked using CRL and/or OCSP.
     
     Args:
-        cert_chain: List of x509.Certificate objects, ordered from leaf to root
-                   [leaf_cert, intermediate_cert(s), root_cert]
-        timeout: Request timeout in seconds (default: 10)
+        cert_chain:         List of x509.Certificate objects, ordered from leaf to root [leaf_cert, intermediate_cert(s), root_cert]
+        stapled_response:   OCSP bytes retrieved from stapled response during TLS session negotiation.
+        timeout:            Request timeout in seconds (default: 10)
     
     Returns:
         Tuple of (is_revoked: bool, revocation_reasons: Optional[str], error_messages: str)
@@ -31,6 +31,7 @@ def check_cert_chain_revocation(cert_chain: list[x509.Certificate], stapled_resp
     logging.warning(f"-----------------------------------Entering check_cert_chain_revocation()-------------------------")
     
     skip = 1  # Skip root for revocation checking.
+
     if len(cert_chain) == 1:
         if cert_chain[0].subject == cert_chain[0].issuer:
             logging.warning('return (Skipping revocation check for self-signed cert.')
@@ -38,6 +39,10 @@ def check_cert_chain_revocation(cert_chain: list[x509.Certificate], stapled_resp
         else:
             # If not self-signed / root, implies incomplete certificate chain. Proceed with revocation checking in this case.
             skip = 0 
+    elif cert_chain[-1].subject != cert_chain[-1].issuer:
+            # Implies incomplete chain, where chain_builder() was unable to identify a trusted root certificate.  
+            # In this case, check revocation for all certs in chain.
+            skip = 0
     
     # Check each certificate in the chain (except true root CA certs)
     all_errors = []
@@ -47,21 +52,13 @@ def check_cert_chain_revocation(cert_chain: list[x509.Certificate], stapled_resp
         cert = cert_chain[i]
         issuer = cert_chain[i + 1] if i + 1 < len(cert_chain) else None
 
-        # If working with unchained cert, attempt to fetch Issuer cert
-        if skip == 0:
-            issuer = fetch_issuer_certificate(cert)
-
         # Get certificate common name for logging messages
         try:
             cn = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
         except Exception:
             cn = ""
         
-        #if skip_leaf and i == 0:
-        #    logging.debug(f"Valid stapled OCSP response for {cn} found; skipping further revocation checks for leaf cert.")
-        #    continue
-        
-        if stapled_response and i == 0:
+        if i == 0 and stapled_response:
             is_revoked, error, reason, method = check_cert_revocation(cert, issuer, cert_chain, timeout, stapled_response)
         else:
             is_revoked, error, reason, method = check_cert_revocation(cert, issuer, cert_chain, timeout)
@@ -86,7 +83,7 @@ def check_cert_chain_revocation(cert_chain: list[x509.Certificate], stapled_resp
         # If we had errors but no confirmed revocations
         return (False, error_msg)
 
-def check_cert_revocation(cert: x509.Certificate, issuer_cert: x509.Certificate, cert_chain: list[x509.Certificate], timeout: int = 10, stapled_response = None) -> Tuple[bool, str, Optional[str], Optional[str]]:
+def check_cert_revocation(cert: x509.Certificate, issuer_cert: x509.Certificate | None, cert_chain: list[x509.Certificate], timeout: int = 10, stapled_response = None) -> Tuple[bool, str, Optional[str], Optional[str]]:
     """
     Check if a certificate has been revoked using CRL and/or OCSP.
     
@@ -104,6 +101,12 @@ def check_cert_revocation(cert: x509.Certificate, issuer_cert: x509.Certificate,
     """
     logging.warning(f"-----------------------------------Entering check_cert_revocation()-------------------------------")
     logging.info(f"Checking revocation for {cert.subject.rfc4514_string()}")
+
+    # If working with unchained cert (or incomplete chain), attempt to fetch Issuer cert
+    if issuer_cert == None:
+        logging.warning('Incomplete certificate chain; attempting to fetch issuer CA cert.')
+        issuer_cert = fetch_issuer_certificate(cert)
+
     crl_result = None
     ocsp_result = None
     errors = []
@@ -184,7 +187,8 @@ def _get_crl_revocation_reason(revoked_cert) -> Optional[str]:
             # No reason extension means unspecified per RFC 5280
             return "UNSPECIFIED"
         except AttributeError as e:
-            logging.error(f"AttributeError accessing reason: {e}, reason_ext type: {type(reason_ext) if 'reason_ext' in locals() else 'N/A'}, value type: {type(reason_value) if 'reason_value' in locals() else 'N/A'}")
+            logging.error(
+                f"AttributeError accessing reason: {e}, reason_ext type: {type(reason_ext) if 'reason_ext' in locals() else 'N/A'}, value type: {type(reason_value) if 'reason_value' in locals() else 'N/A'}")
             return "UNSPECIFIED"
         
     except Exception as e:
@@ -337,7 +341,7 @@ def _check_ocsp(cert: x509.Certificate, issuer_cert: x509.Certificate, cert_chai
             if single_resp.revocation_reason:
                 logging.debug(f" - Revocation Reason:   {single_resp.revocation_reason.name}")
             else:
-                logging.debug(" - Revocation Reason:   Unspecified")
+                logging.debug(" - Revocation Reason:   UNSPECIFIED")
 
     if matched_single_resp is None:
         error_msg = "OCSP response did not contain a SingleResponse for this certificate."

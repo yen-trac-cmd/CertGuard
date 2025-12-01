@@ -4,7 +4,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519, ed448, dsa, padding
 from typing import Sequence, Optional, Tuple
-from utils.x509 import calculate_spki_hash, get_akid, get_spkid
+from utils.x509 import calculate_spki_hash, get_akid, get_skid
 
 def get_root_cert(
         server_chain: Sequence[x509.Certificate], 
@@ -69,7 +69,7 @@ def get_root_cert(
             "Not valid before UTC": cert.not_valid_before_utc,
             "Not valid after UTC": cert.not_valid_after_utc,
             "Authority Key ID (AKI)": aki_extension,
-            "Subject Key ID (SKI)": get_spkid(cert).hex(),
+            "Subject Key ID (SKI)": get_skid(cert).hex(),
             "Subject PubKey (SHA256)": calculate_spki_hash(cert, "SHA256", hex=True),
             "Fingerprint (SHA1)": cert.fingerprint(hashes.SHA1()).hex(),
             "Fingerprint (SHA256)": cert.fingerprint(hashes.SHA256()).hex(),            
@@ -129,7 +129,7 @@ def get_root_cert(
                     logging.info  (f'  Serial number (hex):     {hex(root.serial_number)}')
                     logging.info  (f'  Not valid before UTC:    {root.not_valid_before_utc}')
                     logging.info  (f'  Not valid after UTC:     {root.not_valid_after_utc}')
-                    logging.info  (f'  Subject Key ID (SKI):    {get_spkid(root).hex()}')
+                    logging.info  (f'  Subject Key ID (SKI):    {get_skid(root).hex()}')
                     logging.info  (f'  Subject PubKey (SHA256): {calculate_spki_hash(root, "SHA256", hex=True)}'),
                     logging.info  (f'  Fingerprint (SHA1):      {(root.fingerprint(hashes.SHA1())).hex()}')
                     logging.info  (f'  Fingerprint (SHA256):    {(root.fingerprint(hashes.SHA256())).hex()}')
@@ -147,10 +147,6 @@ def verify_signature(subject: x509.Certificate, issuer: x509.Certificate) -> Non
     
     Handles RSA (PKCS#1 v1.5 and basic PSS), ECDSA, Ed25519/Ed448, and DSA.
     """
-    #from cryptography.hazmat.primitives import serialization
-    #logging.error(f'Subject PEM bytes: {(subject.public_bytes(serialization.Encoding.PEM)).decode("utf-8")}')
-    #logging.info('-----------------------------------')
-    #logging.error(f'Issuer PEM bytes: {(issuer.public_bytes(serialization.Encoding.PEM)).decode("utf-8")}')
         
     pubkey = issuer.public_key()
     oid = subject.signature_algorithm_oid
@@ -212,7 +208,7 @@ def build_cert_index(chain) -> Tuple[dict[str, x509.Certificate], dict[str, x509
         by_subject[cert.subject.rfc4514_string()] = cert
         
         # Index by SKID if present
-        skid = get_spkid(cert)
+        skid = get_skid(cert)
         if skid:
             by_skid[skid] = cert
     
@@ -264,7 +260,9 @@ def normalize_chain(chain: list[x509.Certificate]) -> Tuple[Sequence[x509.Certif
     """
     logging.warning("-----------------------------------Entering normalize_chain()-------------------------------------")
     findings = []
-    logging.debug(f'Chain prior to de-duplication & reordering: {[cert.subject.rfc4514_string() for cert in chain]}')
+    logging.debug(f'Found {len(chain)} certs in server-supplied chain prior to de-duplication & reordering:')
+    for i, cert in enumerate(chain):
+        logging.debug(f' - Cert {i}: {cert.subject.rfc4514_string()}')
 
     # Remove duplicates
     chain, dups = deduplicate_chain(chain)

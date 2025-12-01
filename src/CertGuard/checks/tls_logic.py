@@ -1,7 +1,5 @@
 import logging
 from config.certguard_config import Config
-#from checks.chain_builder import normalize_chain
-#from checks.revocation_logic import validate_ocsp_signature
 from cryptography.x509 import ocsp  #, UnrecognizedExtension, Certificate
 from mitmproxy import tls
 from mitmproxy.addons.tlsconfig import TlsConfig
@@ -30,7 +28,7 @@ class OCSPStaplingConfig(TlsConfig):
         if not config.revocation_checks:
             return
         
-        logging.info('===================================BEGIN New TLS negotiation======================================')
+        logging.info('═══════════════════════════════════ BEGIN New TLS Negotiation ══════════════════════════════════════════════════════')
         
         # Let the parent class set up the connection first
         super().tls_start_server(tls_start)
@@ -93,7 +91,7 @@ class OCSPStaplingConfig(TlsConfig):
             self.failed_domains.add(sni)
             logging.warning(f"[OCSP] TLS handshake failed for {sni}, disabling OCSP for this domain")
     
-    def parse_ocsp_response(self, ocsp_data: bytes, conn_id) -> None:  #cert_chain: list[Certificate],  #####################
+    def parse_ocsp_response(self, ocsp_data: bytes, conn_id) -> None:
         """Parse and store select response details"""
         # Parse OCSP response using cryptography library
         try:

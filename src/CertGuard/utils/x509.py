@@ -76,8 +76,8 @@ def get_extension_value(cert, oid, attr=None):
     except Exception:
         return None
 
-def get_spkid(cert):
-    """Extract Subject Public Key Identifier."""
+def get_skid(cert):
+    """Extract Subject Public Key Identifier (SKI) if present, else calculate it as SHA1 hash of Subject Public Key Information (SPKI)."""
     try:
         ski_extension = get_extension_value(cert, ExtensionOID.SUBJECT_KEY_IDENTIFIER, 'digest')
     except x509.ExtensionNotFound:
@@ -92,16 +92,15 @@ def get_akid(cert):
     """Extract Authority Key Identifier."""
     return get_extension_value(cert, ExtensionOID.AUTHORITY_KEY_IDENTIFIER, 'key_identifier')
 
-def fetch_issuer_certificate(cert: x509.Certificate) -> x509.Certificate | None:
+def fetch_issuer_certificate(cert: x509.Certificate, already_fetched_certs:list[x509.Certificate] = None) -> x509.Certificate | None:
     """
     Extracts the CA Issuer URL from the AIA extension (if present),
     downloads the certificate, and returns it as an x509.Certificate object.
-    Supports DER, PEM, and PKCS#7 (.p7b) encoded responses.
+    Supports DER, PEM, and PKCS#7 (.p7b/.p7c) encoded responses.
     Returns None if no issuer cert is present or downloadable.
     """
-
-    #from asn1crypto import cms, pem
-
+    logging.warning(f"-----------------------------------Entering fetch_issuer_certificate()----------------------------")
+    
     try:
         aia = cert.extensions.get_extension_for_oid(
             x509.ExtensionOID.AUTHORITY_INFORMATION_ACCESS
@@ -119,7 +118,6 @@ def fetch_issuer_certificate(cert: x509.Certificate) -> x509.Certificate | None:
     logging.debug(f'Extracted AIA value(s) from certificate as: {ca_issuer_urls} ')
 
     if not ca_issuer_urls:
-        logging.warning("No CA Issuers entry found in AIA.")
         return None
 
     for url in ca_issuer_urls:
@@ -132,41 +130,56 @@ def fetch_issuer_certificate(cert: x509.Certificate) -> x509.Certificate | None:
             logging.error(f"Failed to download Issuing CA certificate: {e}")
             return None
 
-        data = response.content
+        fetched_file = response.content
 
-        # Try to load as DER
-        try:
-            c = x509.load_der_x509_certificate(data)
-            if c.subject == cert.issuer:
+
+    is_pem = fetched_file.strip().startswith(b"-----BEGIN")
+
+    # Try loading single cert first
+    try:
+        if is_pem:
+            c = x509.load_pem_x509_certificate(fetched_file)
+        else:
+            c = x509.load_der_x509_certificate(fetched_file)
+        return c
+    except Exception:
+        pass
+
+    # Try to load as PKCS#7 bundled certificates
+    logging.info('Attempting to extract issuer cert from PKCS#7 bundle.')
+    aki_to_match = get_akid(cert)
+
+    try:
+        if is_pem:
+            pkcs7_certs = pkcs7.load_pem_pkcs7_certificates(fetched_file)
+        else:
+            pkcs7_certs = pkcs7.load_der_pkcs7_certificates(fetched_file)
+    except Exception:
+        logging.error("No matching issuer certificate could be fetched.")
+        return None
+
+    if pkcs7_certs:
+        for c in pkcs7_certs:
+            #logging.debug(f'fetched cert SKID:       {get_skid(c)}')
+            #logging.debug(f'trying match against     {aki_to_match}')
+            #logging.debug(f'fetched cert subject:    {c.subject.rfc4514_string()}')
+            #logging.debug(f'trying to match against: {cert.issuer.rfc4514_string()}')
+            if (
+                get_skid(c) == aki_to_match and 
+                c.subject == cert.issuer and 
+                c not in (already_fetched_certs or [])
+            ):
                 return c
-        except Exception:
-            pass
+    else:
+        logging.error("No matching issuer certificate could be fetched.")
+        return None
 
-        # Try to load as PEM
+def load_pkcs7_data(pkcs7):
+    """Load certs from PKCS#7 bundle file. Attempt PEM format first, and fall back to DER if necessary"""
+    loaders = [pkcs7.load_pem_pkcs7_certificates, pkcs7.load_der_pkcs7_certificates]
+    for loader in loaders:
         try:
-            c = x509.load_pem_x509_certificate(data)
-            if c.subject == cert.issuer:
-                return c
+            return loader(pkcs7)
         except Exception:
-            pass
-
-        # Try to load as PKCS#7 (PEM)
-        try:
-            pkcs7_certs = pkcs7.load_pem_pkcs7_certificates(data)
-            for c in pkcs7_certs:
-                if c.subject == cert.issuer:
-                    return c
-        except Exception:
-            pass
-
-        # Try to load as PKCS#7 (DER)
-        try:
-            pkcs7_certs = pkcs7.load_der_pkcs7_certificates(data)
-            for c in pkcs7_certs:
-                if c.subject == cert.issuer:
-                    return c
-        except Exception:
-            pass
-
-    logging.error("No matching issuer certificate could be fetched.")
+            continue
     return None

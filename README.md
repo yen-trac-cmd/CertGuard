@@ -50,7 +50,9 @@ git clone https://github.com/yen-trac-cmd/CertGuard/
 
 ### 3. Install Python dependencies
 Inside the activated virtual environment, execute:
-`pip install asn1crypto cryptography dnspython lxml requests-cache`
+```
+pip install asn1crypto cryptography dnspython lxml requests-cache
+```
 
 ### 4. Configure CertGuard
 Adjust the self-documented `config.toml` configuration file to suit your needs.

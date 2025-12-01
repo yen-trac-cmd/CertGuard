@@ -36,6 +36,7 @@ class ErrorLevel(Enum):
                 return 'Maroon'
 
 class DisplayLevel(IntEnum):
+    TOPLEVEL = -2
     CRITICAL = -1     # Critical errors that cannot be bypassed
     WARNING  = 0      # Warnings that trigger CertGuard's blockpage
     POSITIVE = 1      # Noteworthy positive finding

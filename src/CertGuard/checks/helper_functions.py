@@ -5,6 +5,7 @@ import sqlite3
 import sys
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import hashes
 from datetime import datetime, timedelta, timezone
 from glob import glob
 from mitmproxy import http
@@ -94,9 +95,18 @@ def get_root_store(custom_roots_dir) -> list[x509.Certificate]:
                 pass
     logging.info(f'Total root certificates loaded: {len(roots)}')
 
-    with open('logs/_trusted_roots.txt', 'w') as f:
-        for root in roots:
-            f.write(root.subject.rfc4514_string() + '\n')
+    root_entries = []
+    for cert in roots:
+        sha256_fingerprint = cert.fingerprint(hashes.SHA256()).hex()
+        subject = cert.subject.rfc4514_string()
+        root_entries.append((subject, sha256_fingerprint))
+
+    # Sort alphabetically by subject for easier reference in output file.
+    root_entries.sort(key=lambda x: x[0])
+
+    with open('logs/_trusted_roots.txt', 'w', encoding='utf-8') as f:
+        for subject, sha256_fingerprint in root_entries:
+            f.write(f'{sha256_fingerprint}, {subject}\n')
         logging.info(f'List of trusted roots for this session exported to logs/trusted_roots.txt.')
 
     return roots

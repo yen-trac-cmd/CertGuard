@@ -68,7 +68,7 @@ def calculate_spki_hash(cert: x509.Certificate, hash_type: str, hex: bool = Fals
 
     return spki_hash
 
-def get_extension_value(cert, oid, attr=None):
+def get_extension_value(cert: x509.Certificate, oid: ExtensionOID, attr=None):
     """Safely extract extension value, optionally accessing a nested attribute."""
     try:
         ext = cert.extensions.get_extension_for_oid(oid).value
@@ -81,11 +81,10 @@ def get_skid(cert):
     try:
         ski_extension = get_extension_value(cert, ExtensionOID.SUBJECT_KEY_IDENTIFIER, 'digest')
     except x509.ExtensionNotFound:
-        ski_extension = calculate_spki_hash(cert, "SHA1")
+        logging.warning("Certificate does not contain a Subject Key Identifier extension... calclulating best-effort SKI.")
 
     if not ski_extension:
         ski_extension = calculate_spki_hash(cert, "SHA1")
-
     return ski_extension
 
 def get_akid(cert):
@@ -97,7 +96,7 @@ def fetch_issuer_certificate(cert: x509.Certificate, already_fetched_certs:list[
     Extracts the CA Issuer URL from the AIA extension (if present),
     downloads the certificate, and returns it as an x509.Certificate object.
     Supports DER, PEM, and PKCS#7 (.p7b/.p7c) encoded responses.
-    Returns None if no issuer cert is present or downloadable.
+    Returns None if no issuer url is present in AIA, or if cert/bundle is not downloadable.
     """
     logging.warning(f"-----------------------------------Entering fetch_issuer_certificate()----------------------------")
     

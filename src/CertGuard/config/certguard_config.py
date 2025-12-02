@@ -44,8 +44,9 @@ class DisplayLevel(IntEnum):
 
 @dataclass
 class Finding:
-    level: DisplayLevel
+    display_level: DisplayLevel
     check: str
+    error_level: ErrorLevel
     message: str
 
 class Config:

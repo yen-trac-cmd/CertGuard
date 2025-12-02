@@ -109,7 +109,7 @@ class OCSPStaplingConfig(TlsConfig):
         single_responses = list(ocsp_resp.responses)
         response_count = len(single_responses)
         if response_count == 1:
-            logging.debug('Received OCSP response for single certificate')
+            logging.info('[OCSP] Received OCSP response for single certificate')
 
             extensions = None
             try:

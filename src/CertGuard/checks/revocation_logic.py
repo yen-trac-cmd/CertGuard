@@ -498,7 +498,11 @@ def _check_crl(cert: x509.Certificate, crl_urls: list, issuer_cert: x509.Certifi
                 continue
             
             # Check signature on CRL
-            signature_valid = validate_crl_signature(crl, issuer_cert)
+            signature_verified = validate_crl_signature(crl, issuer_cert)
+            if not signature_verified:
+                error_msg = f'Digitial signature verification on CRL failed.'
+                logging.error(error_msg)
+                return (None, error_msg)
 
             # Check if CRL is current
             now = datetime.now(timezone.utc)
@@ -529,7 +533,7 @@ def _check_crl(cert: x509.Certificate, crl_urls: list, issuer_cert: x509.Certifi
             logging.debug(f'Encountered last-catch exception: {e}')
             continue
     
-    logging.debug('Catch-all return; returning None, None.')
+    logging.debug('Unable to check revocation via CRL.')
     return (None, None)
 
 def validate_ocsp_signature(ocsp_resp: ocsp.OCSPResponse, cert_chain: list[x509.Certificate], issuer_cert: x509.Certificate) -> bool:

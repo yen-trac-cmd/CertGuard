@@ -3,8 +3,10 @@ import logging
 import os
 import sqlite3
 import uuid
+
+from requests import get
 from checks.certguard_checks import dane_validator
-from checks.chain_builder import get_root_cert, normalize_chain
+from checks.chain_builder import get_root_cert, normalize_chain, build_cert_index
 from checks.helper_functions import clean_error, get_root_store, is_navigation_request, record_decision, supported_ciphers_list
 from checks.tls_logic import OCSPStaplingConfig
 from config.certguard_config import BYPASS_PARAM, Config, DisplayLevel, ErrorLevel, Finding, Logger
@@ -12,7 +14,7 @@ from cryptography.x509 import Certificate, NameOID
 from cryptography.hazmat.primitives import hashes
 from error_screen import error_screen
 from utils.misc import func_name
-from utils.x509 import fetch_issuer_certificate
+from utils.x509 import fetch_issuer_certificate, get_akid
 from mitmproxy import ctx, http, addonmanager
 from checks.certguard_checks import (
     dane_check,
@@ -33,12 +35,13 @@ from checks.certguard_checks import (
 
 #================================================================ Main ================================================================
 
-config = Config()                                       # Class to set various CertGuard configuration parameters
-ocsp_addon = OCSPStaplingConfig()                       # Class to inject OCSP Stapling requests into TLS handshake to upstream servers
+config = Config()                                               # Class to set various CertGuard configuration parameters
+ocsp_addon = OCSPStaplingConfig()                               # Class to inject OCSP Stapling requests into TLS handshake to upstream servers
 addons = [ocsp_addon]
 
-log = Logger.get_logger()                               # Configure file logger
-root_store = get_root_store(config.custom_roots_dir)    # Load Certifi roots + any custom roots
+log = Logger.get_logger()                                       # Configure file logger
+root_store = get_root_store(config.custom_roots_dir)            # Load Certifi roots + any custom roots
+roots_by_subject, roots_by_ski = build_cert_index(root_store)   # Build root lookup dictionaries
 
 approved_hosts = set()
 pending_requests = {}
@@ -131,7 +134,7 @@ def request(flow: http.HTTPFlow) -> None:
             # Copy OCSP strings to flow metadata
             flow.metadata.update(ocsp_addon.ocsp_by_connection[conn_id])
             logging.debug(f"Attached stapled OCSP data to flow metadata for {flow.request.pretty_host}")
-            findings.append(Finding(DisplayLevel.VERBOSE, func_name(), f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;Stapled OCSP report included in TLS negotiation.'))
+            findings.append(Finding(DisplayLevel.VERBOSE, func_name(), ErrorLevel.NONE.value, f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;Stapled OCSP report included in TLS negotiation.'))
             
             # Retrieve any SCT extensions attached to stapled OCSP responses
             if ocsp_addon.ocsp_sct_list:
@@ -142,8 +145,8 @@ def request(flow: http.HTTPFlow) -> None:
                     
                     # Raise level-6 blockpage during hunt for *any* website using stapled SCTs in OCSP response.
                     finding = f'🎉 Found SCT in stapled OCSP response for <b>{flow.request.pretty_url}</b>!!'
-                    findings.append(Finding(DisplayLevel.WARNING, func_name(), finding))
                     highest_error_level = ErrorLevel.FATAL.value
+                    findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.FATAL.value, finding))
                     #error_screen(config, flow, None, ErrorLevel.FATAL.color, [finding], ErrorLevel.FATAL.value)
 
                     # TODO: If ever encounter real-life SCT in stapled OCSP response, pass into ct_logic module
@@ -173,17 +176,19 @@ def request(flow: http.HTTPFlow) -> None:
     cert_chain, errors = normalize_chain([cert.to_cryptography() for cert in mitm_cert_chain])
     if errors:
         highest_error_level = ErrorLevel.ERROR.value
-        findings.append(Finding(DisplayLevel.WARNING, func_name(), errors))
+        findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.ERROR.value, errors))
     
     # If chain incomplete, fetch missing intermediate CA certs via AIA chasing
     root_already_present = False
     fetched_certs = []
     top_of_chain = cert_chain[-1]
-    
+    root = None
+
+    '''
     if top_of_chain.subject == top_of_chain.issuer:
         root_already_present = True
         highest_error_level = ErrorLevel.ERROR.value
-        findings.append(Finding(DisplayLevel.WARNING, func_name(), f'⚠️ Root certificate included in server-supplied cert chain.'))
+        findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.ERROR.value, f'⚠️ Root certificate included in server-supplied cert chain.'))
     else:
         while True:
             chain_issuer = fetch_issuer_certificate(top_of_chain, fetched_certs)
@@ -194,13 +199,52 @@ def request(flow: http.HTTPFlow) -> None:
                 logging.warning(f'Fetched missing cert from chain: {chain_issuer.subject.rfc4514_string()}')
                 fetched_certs.append(chain_issuer)
                 top_of_chain = chain_issuer
+    '''
+    ################### Begin testing #######################
+    if top_of_chain.subject == top_of_chain.issuer:
+        root_already_present = True
+        root = top_of_chain
+        highest_error_level = ErrorLevel.ERROR.value
+        findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.ERROR.value, f'⚠️ Root certificate included in server-supplied cert chain.'))
+    else:
+        while True:
+            cert_aki = get_akid(top_of_chain)
+
+            if cert_aki in roots_by_ski:
+                root = roots_by_ski[cert_aki]
+                logging.debug('Identified root via dictionary lookup against AKI.')  # as: {root.subject.rfc4514_string()
+                #fetched_certs.append(root)
+                break
+            elif top_of_chain.issuer in roots_by_subject:
+                root = roots_by_subject[top_of_chain.issuer]
+                logging.info('Identified root via dictionary lookup against Issuer subject.')
+                #fetched_certs.append(root)
+                break
+            
+            # Attempt to fetch next cert in chain by chasing AIA
+            chain_issuer = fetch_issuer_certificate(top_of_chain, fetched_certs)
+            if not chain_issuer:
+                logging.error(f'Could not fetch parent cert for {top_of_chain.subject.rfc4514_string()}')
+                root = top_of_chain
+                break
+            elif chain_issuer.subject == chain_issuer.issuer:
+                logging.info(f'Identified untrusted root as: {chain_issuer.subject.rfc4514_string()}')
+                root = chain_issuer
+                #fetched_certs.append(root)
+                break
+            else:
+                logging.warning(f'Fetched missing cert from chain: {chain_issuer.subject.rfc4514_string()}')
+                fetched_certs.append(chain_issuer)
+                top_of_chain = chain_issuer
+    ######################## End Testing #############################
 
     if fetched_certs:
-        findings.append(Finding(DisplayLevel.WARNING, func_name(), f'⚠️ Server failed to send complete certificate chain.'))
+        findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.ERROR.value, f'⚠️ Server failed to send complete certificate chain.'))
         cert_chain.extend(fetched_certs)
 
-    # Retrieve validated root cert as cryptography.x509.Certificate object.
-    root_cert, claimed_root, verification_error, self_signed = get_root_cert(cert_chain, root_store)
+    # Verify full certificate chain and retrieve validated root cert as cryptography.x509.Certificate object.
+    root_cert, claimed_root, verification_error, self_signed = get_root_cert(cert_chain, root, roots_by_ski, root_store)
+    
     if root_cert:
         root_hash = root_cert.fingerprint(hashes.SHA256()).hex()
         # Add root cert to chain (if not already present) for a complete / validated chain
@@ -214,30 +258,30 @@ def request(flow: http.HTTPFlow) -> None:
         
         if not ca_org:
             violation = f"⛔ No Organization (O=) value found in root CA certificate:<br>&emsp;&emsp;▶ <b>{root_cert.subject.rfc4514_string()}</b>"
-            findings.append(Finding(DisplayLevel.CRITICAL, func_name(), violation))
+            findings.append(Finding(DisplayLevel.CRITICAL, func_name(), ErrorLevel.CRIT.value, violation))
         else:
-            findings.append(Finding(DisplayLevel.VERBOSE, func_name(), f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;Root CA Operator: {ca_org}'))
+            findings.append(Finding(DisplayLevel.VERBOSE, func_name(), ErrorLevel.NONE.value, f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;Root CA Operator: {ca_org}'))
 
     elif self_signed:
         #TODO: Add logic for DANE usage type 3, where cert may be self-attested in TLSA record.
-        findings.append(Finding(DisplayLevel.WARNING, func_name(), f'⚠️ Encountered self-signed certificate:&emsp;&emsp;<b>{self_signed.subject.rfc4514_string()}</b>'))
+        findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.ERROR.value, f'⚠️ Encountered self-signed certificate:&emsp;&emsp;<b>{self_signed.subject.rfc4514_string()}</b>'))
         highest_error_level = ErrorLevel.ERROR.value
         blockpage_color = ErrorLevel.ERROR.color
         root_hash = self_signed.fingerprint(hashes.SHA256()).hex()
     elif claimed_root:
         #TODO: Add logic for DANE usage type 2, where root may be a private CA.
         logging.error(f'Could not validate chained cert against claimed Issuer of: ({claimed_root}).')
-        findings.append(Finding(DisplayLevel.CRITICAL, func_name(), f'⛔ Could not validate cert against claimed Issuer cert of:<br>&emsp;&emsp;<b>{claimed_root}</b>'))
+        findings.append(Finding(DisplayLevel.CRITICAL, func_name(), ErrorLevel.FATAL.value, f'⛔ Could not validate cert against claimed Issuer cert of:<br>&emsp;&emsp;<b>{claimed_root}</b>'))
         if len(cert_chain) == 1:
             logging.error(f'Server failed to send complete certificate chain.')
-            findings.append(Finding(DisplayLevel.WARNING, func_name(), '&emsp;&emsp;▶ Server failed to send complete certificate chain.'))
+            findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.ERROR.value, '&emsp;&emsp;▶ Server failed to send complete certificate chain.'))
         highest_error_level = ErrorLevel.FATAL.value
         blockpage_color = ErrorLevel.FATAL.color
         root_hash = f"Unidentified_root - {claimed_root}"
 
     if verification_error:
         logging.error(f'Encountered verification error while building certificate chain: {verification_error}')
-        findings.append(Finding(DisplayLevel.CRITICAL, func_name(), f'⛔ Could not verify certificate chain: {verification_error}'))
+        findings.append(Finding(DisplayLevel.CRITICAL, func_name(), ErrorLevel.FATAL.value, f'⛔ Could not verify certificate chain: {verification_error}'))
         highest_error_level = ErrorLevel.FATAL.value
         blockpage_color = ErrorLevel.FATAL.color
         root_hash = "Unverified root"
@@ -336,9 +380,9 @@ def request(flow: http.HTTPFlow) -> None:
     logging.info(f'-----------------------------------END verification for {host}--------------------------------------------')
 
     # Sort findings by display level and structure as JSON for the logfile.
-    findings.sort(key=lambda f: f.level)
-    filtered_findings = [f for f in findings if f.level <= config.bp_verbosity]
-    cleaned_errors = [ {"check": f.check, "message": clean_error(f.message)} for f in filtered_findings]
+    findings.sort(key=lambda f: f.display_level)
+    filtered_findings = [f for f in findings if f.display_level <= config.bp_verbosity]
+    cleaned_errors = [ {"check": f.check, "error_level": f.error_level, "message": clean_error(f.message)} for f in filtered_findings]
     flow.metadata["CertGuard_findings"] = cleaned_errors if cleaned_errors else None
     flow.metadata["Highest_Errorlevel"] = highest_error_level
     if is_main_page:

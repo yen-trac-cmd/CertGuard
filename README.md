@@ -63,6 +63,7 @@ Adjust the self-documented `config.toml` configuration file to suit your needs.
 - Tune DANE options
 - etc.
 
+If you're running in an environment with upstream TLS-intercepting proxies, you'll also need to place a copy of the appropriate custom certificate(s) under the custom CA certificates directory.  The location of the directories can be customized inside the `config.toml` file.  Note that all custom certificates must be provided in PEM format and use a `.pem` file extension.  For further information on how to run mitmproxy with upstream forward proxies or other types of proxy modes, see https://docs.mitmproxy.org/stable/concepts/modes.  
 
 ## 🚀 Running CertGuard
 From the CertGuard project directory (where certguard.py resides), launch mitmproxy with the CertGuard script:
@@ -70,8 +71,10 @@ From the CertGuard project directory (where certguard.py resides), launch mitmpr
 mitmproxy -s ./src/CertGuard/certguard.py
 ```
 
-After starting mitmproxy, direct your browser or test device to use the proxy.
+After starting mitmproxy, configure your browser or test device to use the proxy.
 CertGuard will analyze certificates and display validation results in real-time.
+
+You can test that CertGuard checks are working by browsing to https://www.example.com/path, which will generate a Level-1 Warning page by the test_check() function.
 
 ## 🛠 Project Status
 CertGuard is merely a proof-of-concept created as part of a research project.  It is **not** suitable for use in production environments and has **not** been code-reviewed for security vulnerabilities.  It's also a work-in-progress, so APIs, validation logic, and output formatting may evolve rapidly as features are refined.  **USE AT YOUR OWN RISK!**

@@ -17,9 +17,10 @@ dns_timeout = 1.5
 resolvers = ['1.1.1.1', '8.8.8.8'] # Cloudflare, Quad9, and Google resolvers, respectively, but note that using public resolvers over insecure channels introduces significant risks.
 #resolvers = ['127.0.0.1']
 
-# OPTIONAL: Provide the path to a directory that contains custom root certificate files in PEM format.
-# Note: All root certificate files must have a ".pem" file extension.
-custom_roots_dir = "./custom_roots/"
+# OPTIONAL: Provide the path to a directory that contains custom root and/or interemdiate CA certificate files in PEM format.
+# Note: All CA certificate files must have a ".pem" file extension.
+custom_roots_dir = "./custom_CAs/roots/"
+custom_ints_dir  = "./custom_CAs/intermediates/"
 
 # Configure path to SQLite database that will hold certificate information & prior approval decisions
 db_path = "./Guard.db"
@@ -108,8 +109,8 @@ quick_check = false
 # Set verify_signatures to true to locally validate the digital signature of all returned Signed Certificate Timestamps (SCTs).
 verify_signatures = true
 
-# Enabling 'verify_inclusion' instructs CertGuard to retrieve an inclusion proof from RFC6962-compliant CT log servers and perform a full Merkle tree reconstruction against the 
-# latest Signed Tree Head (STH).  This provides a cryptographic guarantee that the leaf certificate was fully logged by the CT server.
+# Enabling 'verify_inclusion' instructs CertGuard to retrieve an inclusion proof from RFC6962-compliant CT log servers and perform a full Merkle tree reconstruction 
+# against the latest Signed Tree Head (STH).  This provides a cryptographic guarantee that the leaf certificate was fully logged by the CT server.
 verify_inclusion = true
 
 

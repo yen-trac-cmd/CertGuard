@@ -330,7 +330,9 @@ class DANETLSAValidator:
             logging.debug(f"DNSSEC check failed: {e}")
             return False
 
+    '''
     def done(self) -> None:
+        
         """Called when the add-on is unloaded."""
         print("DANE TLSA Validator statistics:")
         print(f"  Validated: {self.stats['validated']}")
@@ -338,7 +340,7 @@ class DANETLSAValidator:
         print(f"  No TLSA: {self.stats['no_tlsa']}")
         print(f"  DNS Failed: {self.stats['dns_failed']}")
         print(f"  DNSSEC Failed: {self.stats['dnssec_failed']}") 
-
+    '''
 '''
 def get_dane_root(server_chain: Sequence[x509.Certificate], root_store: list[x509.Certificate]) -> Tuple[Optional[x509.Certificate], Optional[str]]:
     """

@@ -74,6 +74,6 @@ After starting mitmproxy, direct your browser or test device to use the proxy.
 CertGuard will analyze certificates and display validation results in real-time.
 
 ## 🛠 Project Status
-CertGuard is merely a proof-of-concept created as part of a research project and is **not** suitable for use in production environments and has **not** been code-reviewed for security vulnerabilities.  It's also a work-in-progress, so APIs, validation logic, and output formatting may evolve rapidly as features are refined.  **USE AT YOUR OWN RISK!**
+CertGuard is merely a proof-of-concept created as part of a research project.  It is **not** suitable for use in production environments and has **not** been code-reviewed for security vulnerabilities.  It's also a work-in-progress, so APIs, validation logic, and output formatting may evolve rapidly as features are refined.  **USE AT YOUR OWN RISK!**
 
 Feedback, issue reports, and suggestions are welcome.

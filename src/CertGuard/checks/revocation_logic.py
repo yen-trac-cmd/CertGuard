@@ -69,7 +69,6 @@ def check_cert_chain_revocation(cert_chain: list[x509.Certificate], stapled_resp
             all_errors.append(f"<br>&emsp;&emsp;▶ Cert #{i} (<code>{cn}</code>) is revoked per {method}<br>&emsp;&emsp;<b>Reason:</b> {reason}") #########
         
         if error:
-            logging.error(f'Error(s) encountered checking cert #{i} ({cn}): {error}')
             all_errors.append(f"⚠️ Error while checking revocation for cert #{i} (<code>{cn}</code>):<br>&emsp;&emsp;▶ {error}")
     
     # If we checked all certs and none were revoked
@@ -102,51 +101,59 @@ def check_cert_revocation(cert: x509.Certificate, issuer_cert: x509.Certificate 
     logging.warning(f"-----------------------------------Entering check_cert_revocation()-------------------------------")
     logging.info(f"Checking revocation for {cert.subject.rfc4514_string()}")
 
-    # If working with unchained cert (or incomplete chain), attempt to fetch Issuer cert
-    if issuer_cert == None:
-        logging.warning('Incomplete certificate chain; attempting to fetch issuer CA cert.')
-        issuer_cert = fetch_issuer_certificate(cert)
-
     crl_result = None
     ocsp_result = None
     errors = []
     return_msg: str = None
-    
+
+    # If working with unchained cert (or incomplete chain), attempt to fetch Issuer cert
+    if issuer_cert == None:
+        logging.warning('Incomplete certificate chain; attempting to fetch issuer CA cert.')
+        issuer_cert = fetch_issuer_certificate(cert)
+    if not issuer_cert:
+        error_msg = (f'Unable to fetch Issuer cert to perform revocation checks.')
+        logging.error(error_msg)
+        return (False, error_msg, None, None)
+
     # Try OCSP first
-    try:
-        if stapled_response:   # Check for stapled OCSP response bytes before attempting to perform online status query
-            logging.debug('Verifying against TLS-stapled OCSP response.')
+    if stapled_response:   # Check for stapled OCSP response bytes before attempting to perform online status query
+        logging.debug('Verifying against TLS-stapled OCSP response.')
+        try:
             ocsp_result, return_msg = _check_ocsp(cert, issuer_cert, cert_chain, stapled_response)
-        else:
+        except Exception as e:
+            errors.append(f"OCSP check for stapled response failed: {str(e)}")
+    else:
+        try:
             ocsp_urls = _get_ocsp_urls(cert)
             logging.debug(f'OCSP URLs extracted: {ocsp_urls}')
             if ocsp_urls:
                 ocsp_result, return_msg = _get_ocsp(cert, issuer_cert, cert_chain, ocsp_urls, timeout)
-    except Exception as e:
-        errors.append(f"OCSP check failed: {str(e)}")
+        except Exception as e:
+            errors.append(f"OCSP check failed against fetched OCSP status: {str(e)}")   
 
     if ocsp_result is True:  # Explicitly revoked
         return (True, "", return_msg, "OCSP")
     elif ocsp_result is False:  # Explicitly not revoked
         return (False, "", None, None)
     else:
-        errors.append(return_msg)
+        logging.info('Unable to check revocation via OCSP; falling back to CRL (if CDP present).')
+        if return_msg: errors.append(return_msg)
     
     # Try CRL as fallback
-    logging.info('Unable to check revocation via OCSP; falling back to CRL (if CDP present).')
     try:
         crl_urls = _get_crl_urls(cert)
+        crl_errors = []
         if crl_urls:
-            crl_result, crl_reason = _check_crl(cert, crl_urls, issuer_cert, timeout)
+            crl_result, crl_reason, crl_errors = _check_crl(cert, crl_urls, issuer_cert, timeout)
             if crl_result is True:  # Explicitly revoked
                 return (True, "", crl_reason, "CRL")
             elif crl_result is False: 
                 return (False, "", None, None)
             else:
-                errors.append("Encountered error in _check_crl(); CRL check returned None")
+                if crl_errors: errors.extend(crl_errors)
     except Exception as e:
         errors.append(f"CRL check failed: {str(e)}")
-    
+
     # If we got here, we couldn't definitively check revocation
     if not ocsp_urls and not crl_urls:
         return (False, "No revocation information (CRL/OCSP) in certificate", None, None)
@@ -472,6 +479,7 @@ def _check_crl(cert: x509.Certificate, crl_urls: list, issuer_cert: x509.Certifi
     logging.warning(f"-----------------------------------Entering _check_crl()------------------------------------------")
     cert_serial = cert.serial_number
     logging.debug(f'Cert serial number: {cert_serial}')
+    error_messages = []
 
     # Try each CRL URL
     for url in crl_urls:
@@ -490,24 +498,29 @@ def _check_crl(cert: x509.Certificate, crl_urls: list, issuer_cert: x509.Certifi
                     crl = x509.load_pem_x509_crl(response.content)
                     logging.debug(f'Successfully parsed PEM-encoded CRL.')
                 except Exception:
-                    logging.debug(f'Unable to parse downloaded CRL {crl}')
+                    error_msg = f'Unable to parse downloaded CRL {crl}'
+                    error_messages.append(error_msg)
+                    logging.debug(error_msg)
                     continue
             
             # Check if parsing succeeded & skip if not.
-            if crl is None:
-                continue
+            if crl is None: continue
             
             # Check signature on CRL
             signature_verified = validate_crl_signature(crl, issuer_cert)
             if not signature_verified:
-                error_msg = f'Digitial signature verification on CRL failed.'
+                error_msg = f'&emsp;&emsp;▶ Digitial signature verification on CRL failed.'
+                error_messages.append(error_msg)
                 logging.error(error_msg)
-                return (None, error_msg)
+                continue
+                #return (None, error_msg, None)
 
             # Check if CRL is current
             now = datetime.now(timezone.utc)
             if crl.next_update_utc and now > crl.next_update_utc:
-                logging.debug('CRL is expired; trying next one (if present)...')
+                error_msg = f'CRL expired on {crl.next_update_utc.strftime("%Y-%m-%d")}.'
+                logging.debug(f'{error_msg}  Trying next CRL (if present)...')
+                error_messages.append(error_msg)
                 continue
             
             # Check if certificate is in the revoked list
@@ -518,23 +531,27 @@ def _check_crl(cert: x509.Certificate, crl_urls: list, issuer_cert: x509.Certifi
                 if revoked_cert is not None:
                     # Get revocation reason from extensions
                     reason = _get_crl_revocation_reason(revoked_cert)
-                    return (True, reason)
+                    return (True, reason, None)
                 else:
                     # Cert not present in CRL
                     logging.debug('Cert not present in CRL')
-                    return (False, None)
+                    return (False, None, None)
             except Exception as e:
                 # If we can't check the serial, continue to next CRL
-                logging.debug(f'Encountered exception: {e}')
+                error_msg = f'Encountered exception: {e}'
+                logging.debug(error_msg)
+                error_messages.append(error_msg)
                 continue
                 
         except Exception as e:
             # Log but continue to next URL
-            logging.debug(f'Encountered last-catch exception: {e}')
+            error_msg = f'Encountered catch-all exception: {e}'
+            logging.debug(error_msg)
+            error_messages.append(error_msg)
             continue
     
     logging.debug('Unable to check revocation via CRL.')
-    return (None, None)
+    return (None, None, error_messages)
 
 def validate_ocsp_signature(ocsp_resp: ocsp.OCSPResponse, cert_chain: list[x509.Certificate], issuer_cert: x509.Certificate) -> bool:
         """Validate the OCSP response signature against the certificate chain"""
@@ -659,10 +676,10 @@ def validate_crl_signature(crl: x509.CertificateRevocationList, issuer_cert: x50
             logging.error("CRL has expired (next_update passed)")
             # Don't return False - expired CRL is still valid, just stale
         
-                   # Check if CRL issuer matches the certificate issuer
+        # Check if CRL issuer matches the certificate issuer
         if crl.issuer != issuer_cert.subject:
-            logging.warning("CRL issuer does not match certificate issuer")
-            logging.warning(f"CRL Issuer: {crl.issuer.rfc4514_string()}")
+            logging.warning("CRL  Issuer does not match certificate issuer")
+            logging.warning(f"CRL  Issuer: {crl.issuer.rfc4514_string()}")
             logging.warning(f"Cert Issuer: {issuer_cert.subject.rfc4514_string()}")
             
             # Check Authority Key Identifier

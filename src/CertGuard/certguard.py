@@ -7,7 +7,7 @@ import uuid
 from requests import get
 from checks.certguard_checks import dane_validator
 from checks.chain_builder import get_root_cert, normalize_chain, build_cert_index
-from checks.helper_functions import clean_error, get_root_store, is_navigation_request, record_decision, supported_ciphers_list
+from checks.helper_functions import clean_error, get_cert_stores, is_navigation_request, record_decision, supported_ciphers_list
 from checks.tls_logic import OCSPStaplingConfig
 from config.certguard_config import BYPASS_PARAM, Config, DisplayLevel, ErrorLevel, Finding, Logger
 from cryptography.x509 import Certificate, NameOID
@@ -40,8 +40,13 @@ ocsp_addon = OCSPStaplingConfig()                               # Class to injec
 addons = [ocsp_addon]
 
 log = Logger.get_logger()                                       # Configure file logger
-root_store = get_root_store(config.custom_roots_dir)            # Load Certifi roots + any custom roots
-roots_by_subject, roots_by_ski = build_cert_index(root_store)   # Build root lookup dictionaries
+
+# Load Certifi roots + any custom roots and/or intermediate CA certs 
+root_store, int_store = get_cert_stores(config.custom_roots_dir, config.custom_ints_dir)
+
+# Build lookup dictionaries for parent cert discovery by AIA or subject
+roots_by_subject, roots_by_ski = build_cert_index(root_store)
+ints_by_subject,  ints_by_ski  = build_cert_index(int_store)
 
 approved_hosts = set()
 pending_requests = {}
@@ -143,11 +148,11 @@ def request(flow: http.HTTPFlow) -> None:
                     logging.debug(f"SCT extension found in stapled OCSP response: {stapled_sct}")
                     del ocsp_addon.stapled_sct[conn_id]
                     
-                    # Raise level-6 blockpage during hunt for *any* website using stapled SCTs in OCSP response.
+                    # Raise immediate level-6 blockpage during hunt for *any* website adding SCTs as OCSP extension inside stapled responses.
                     finding = f'🎉 Found SCT in stapled OCSP response for <b>{flow.request.pretty_url}</b>!!'
                     highest_error_level = ErrorLevel.FATAL.value
                     findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.FATAL.value, finding))
-                    #error_screen(config, flow, None, ErrorLevel.FATAL.color, [finding], ErrorLevel.FATAL.value)
+                    error_screen(config, flow, None, ErrorLevel.FATAL.color, [finding], ErrorLevel.FATAL.value)
 
                     # TODO: If ever encounter real-life SCT in stapled OCSP response, pass into ct_logic module
                     # for signature validation & inclusion proofing.
@@ -184,23 +189,6 @@ def request(flow: http.HTTPFlow) -> None:
     top_of_chain = cert_chain[-1]
     root = None
 
-    '''
-    if top_of_chain.subject == top_of_chain.issuer:
-        root_already_present = True
-        highest_error_level = ErrorLevel.ERROR.value
-        findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.ERROR.value, f'⚠️ Root certificate included in server-supplied cert chain.'))
-    else:
-        while True:
-            chain_issuer = fetch_issuer_certificate(top_of_chain, fetched_certs)
-            # Skip fetching root; rely on local trust store instead.
-            if chain_issuer == None or chain_issuer.subject == chain_issuer.issuer:
-                break
-            else:
-                logging.warning(f'Fetched missing cert from chain: {chain_issuer.subject.rfc4514_string()}')
-                fetched_certs.append(chain_issuer)
-                top_of_chain = chain_issuer
-    '''
-    ################### Begin testing #######################
     if top_of_chain.subject == top_of_chain.issuer:
         root_already_present = True
         root = top_of_chain
@@ -209,34 +197,41 @@ def request(flow: http.HTTPFlow) -> None:
     else:
         while True:
             cert_aki = get_akid(top_of_chain)
-
-            if cert_aki in roots_by_ski:
+            
+            # TODO - Add custom_intermediates folder.  Parse 
+            if cert_aki in ints_by_ski:
+                intCA = ints_by_ski[cert_aki]
+                fetched_certs.append(intCA)
+                top_of_chain = intCA
+                logging.debug(f'Identified intermediate CA ({intCA.subject.rfc4514_string()}) via dictionary lookup against AKI.')
+                continue
+            elif top_of_chain.issuer in ints_by_subject:
+                intCA = ints_by_subject[top_of_chain.issuer]
+                fetched_certs.append(intCA)
+                top_of_chain = intCA
+                logging.debug(f'Identified intermediate CA ({intCA.subject.rfc4514_string()}) via dictionary lookup against Issuer subject.')
+                continue
+            elif cert_aki in roots_by_ski:
                 root = roots_by_ski[cert_aki]
                 logging.debug('Identified root via dictionary lookup against AKI.')  # as: {root.subject.rfc4514_string()
-                #fetched_certs.append(root)
                 break
             elif top_of_chain.issuer in roots_by_subject:
                 root = roots_by_subject[top_of_chain.issuer]
                 logging.info('Identified root via dictionary lookup against Issuer subject.')
-                #fetched_certs.append(root)
                 break
             
             # Attempt to fetch next cert in chain by chasing AIA
             chain_issuer = fetch_issuer_certificate(top_of_chain, fetched_certs)
             if not chain_issuer:
-                logging.error(f'Could not fetch parent cert for {top_of_chain.subject.rfc4514_string()}')
-                root = top_of_chain
                 break
             elif chain_issuer.subject == chain_issuer.issuer:
                 logging.info(f'Identified untrusted root as: {chain_issuer.subject.rfc4514_string()}')
                 root = chain_issuer
-                #fetched_certs.append(root)
                 break
-            else:
+            else:   # Fetched cert is an intermediate.
                 logging.warning(f'Fetched missing cert from chain: {chain_issuer.subject.rfc4514_string()}')
                 fetched_certs.append(chain_issuer)
                 top_of_chain = chain_issuer
-    ######################## End Testing #############################
 
     if fetched_certs:
         findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.ERROR.value, f'⚠️ Server failed to send complete certificate chain.'))
@@ -270,7 +265,7 @@ def request(flow: http.HTTPFlow) -> None:
         root_hash = self_signed.fingerprint(hashes.SHA256()).hex()
     elif claimed_root:
         #TODO: Add logic for DANE usage type 2, where root may be a private CA.
-        logging.error(f'Could not validate chained cert against claimed Issuer of: ({claimed_root}).')
+        logging.error(f'Could not validate chained cert against claimed Issuer of: {claimed_root}.')
         findings.append(Finding(DisplayLevel.CRITICAL, func_name(), ErrorLevel.FATAL.value, f'⛔ Could not validate cert against claimed Issuer cert of:<br>&emsp;&emsp;<b>{claimed_root}</b>'))
         if len(cert_chain) == 1:
             logging.error(f'Server failed to send complete certificate chain.')

@@ -18,6 +18,8 @@ resources/ct_log_list.json/*.json
 # Testing
 tests/
 test*
+*.bak
+*.backup
 
 # Misc
 .vscode/

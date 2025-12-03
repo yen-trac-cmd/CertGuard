@@ -6,7 +6,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519, ed448, d
 from typing import Sequence, Optional, Tuple
 from utils.x509 import calculate_spki_hash, get_akid, get_skid
 
-def get_root_cert(server_chain: Sequence[x509.Certificate], root_cert: x509.Certificate, trusted_roots_by_ski: dict,
+def get_root_cert(server_chain: Sequence[x509.Certificate], root_cert: Optional[x509.Certificate], trusted_roots_by_ski: dict,
         root_store: Sequence[x509.Certificate]) -> Tuple[Optional[x509.Certificate], Optional[str], Optional[str], Optional[x509.Certificate]]:
     """
     Given an x509.Certificate chain and trusted root store, attempt to resolve and verify the root CA certificate for the server's certificate chain.
@@ -102,19 +102,23 @@ def get_root_cert(server_chain: Sequence[x509.Certificate], root_cert: x509.Cert
     # TODO: Add additional logic to handle DANE usage types 2 and 3 when using private CA or self-signed leaf certs.
     root_in_chain = False
     if last_cert.subject == last_cert.issuer:
-        #logging.warning('Note: Root cert included in cert chain from webserver.')   # <-- Duplicate warning
         if len(server_chain) > 2:
             last_cert = server_chain[-2]
         root_in_chain = True
 
     ############ Testing #############
+    if root_cert is None:
+        error = f'Unable to fetch missing certs from certificate chain to identify root cert.'
+        logging.error(error)
+        return None, last_cert.issuer.rfc4514_string(), f'<br>&emsp;&emsp;▶ {error}', None
+    
     try:
         verify_signature(last_cert, root_cert)
     except Exception as e:
         logging.error(f"Root CA cert verification failed: {e}")
 
-    # The passed-in root_cert could be a trusted root from our local root store -OR- an enumerated root fetched from AIA.
-    # Determine if it's trusted or not for later logic.
+    # Despite successful signature verification, the passed-in root_cert could be a trusted root from our local 
+    # root store -OR- an enumerated root fetched from AIA.  Determine if it's trusted or not for later logic.
     root_skid = get_skid(root_cert)
     root_is_trusted = root_skid in trusted_roots_by_ski
 

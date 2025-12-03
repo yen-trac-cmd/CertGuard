@@ -114,9 +114,10 @@ def fetch_issuer_certificate(cert: x509.Certificate, already_fetched_certs:list[
         if desc.access_method == AuthorityInformationAccessOID.CA_ISSUERS
     ]
 
-    logging.debug(f'Extracted AIA value(s) from certificate as: {ca_issuer_urls} ')
-
-    if not ca_issuer_urls:
+    if ca_issuer_urls:
+        logging.debug(f'Extracted AIA value(s) from certificate as: {ca_issuer_urls} ')
+    else:
+        logging.error(f'Unable to extract CA Issuer URL from AIA in certificate {cert.subject.rfc4514_string()}')
         return None
 
     for url in ca_issuer_urls:
@@ -130,7 +131,6 @@ def fetch_issuer_certificate(cert: x509.Certificate, already_fetched_certs:list[
             return None
 
         fetched_file = response.content
-
 
     is_pem = fetched_file.strip().startswith(b"-----BEGIN")
 

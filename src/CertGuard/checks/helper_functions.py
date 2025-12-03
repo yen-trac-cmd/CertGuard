@@ -51,15 +51,18 @@ def is_navigation_request(flow: http.HTTPFlow, referer_header, accept_header) ->
     logging.info(f"Could not ascertain new browser navigation; returning False.")
     return False
 
-def get_root_store(custom_roots_dir) -> list[x509.Certificate]:
+def get_cert_stores(custom_roots_dir: str, custom_ints_dir: str) -> list[x509.Certificate]:
     """
-    Loads trusted root certificates from local certifi store, along with any defined custom roots.
+    Loads trusted root certificates from local certifi store, along with any defined custom CA root/intermediate certs.
 
     Args:
-        None
+        custom_roots_dir:     Directory for additional root CA certs to load beyond what ships in Certifi bundle.
+        custom_ints_dir:      Directory for additional intermediate CA certs to load.  
+                              (Sometimes required for servers that fail to send complete certificate chains)
     
     Returns:
-        roots (list): List of cryptography.x509.Certificate objects for each root certificate enumerated.
+        roots: List of cryptography.x509.Certificate objects for each Root CA certificate enumerated.
+        ints:  List of cryptography.x509.Certificate objects for each Intermediate CA certificate enumerated.
     """
     if not os.path.exists(certifi.where()):
         logging.critical(f"FATAL Error: Cannot locate certifi store at {certifi.where()}. Try updating the 'certifi' package for your OS!")
@@ -76,13 +79,25 @@ def get_root_store(custom_roots_dir) -> list[x509.Certificate]:
     if custom_roots_dir != None:
         if os.path.isdir(custom_roots_dir):
             pem_files = glob(os.path.join(custom_roots_dir, '*.pem'))
-            logging.info(f'Loading {len(pem_files)} custom root files from {custom_roots_dir}.')
+            logging.info(f'Loading {len(pem_files)} custom root CA cert files from {custom_roots_dir}.')
             for file in pem_files:
                 with open(file, "rb") as f:
                     root_bundle += f.read()
         else:
             logging.critical(f"Could not find directory specified for 'custom_roots_dir': {custom_roots_dir}.")
             logging.critical(f"Please check configuration in config.toml file or create/populate custom roots directory.")
+    
+    if custom_ints_dir != None:
+        if os.path.isdir(custom_ints_dir):
+            int_bundle = b""
+            pem_files = glob(os.path.join(custom_ints_dir, '*.pem'))
+            logging.info(f'Loading {len(pem_files)} custom intermediate CA cert files from {custom_ints_dir}.')
+            for file in pem_files:
+                with open(file, "rb") as f:
+                    int_bundle += f.read()
+        else:
+            logging.critical(f"Could not find directory specified for 'custom_ints_dir': {custom_ints_dir}.")
+            logging.critical(f"Please check configuration in config.toml file or create/populate custom intermediates directory.")
 
     roots: list[x509.Certificate] = []
     for pem_block in root_bundle.split(b"-----END CERTIFICATE-----"):
@@ -95,13 +110,25 @@ def get_root_store(custom_roots_dir) -> list[x509.Certificate]:
                 pass
     logging.info(f'Total root certificates loaded: {len(roots)}')
 
+    ints: list[x509.Certificate] = []
+    for pem_block in int_bundle.split(b"-----END CERTIFICATE-----"):
+        pem_block = pem_block.strip()
+        if pem_block:
+            pem_block += b"\n-----END CERTIFICATE-----\n"
+            try:
+                ints.append(x509.load_pem_x509_certificate(pem_block, default_backend()))
+            except Exception:
+                pass
+    logging.info(f'Total intermediate CA certificates loaded: {len(roots)}')
+
+    # Build list for exporting full root store to '_trusted_roots.txt' reference file.
     root_entries = []
     for cert in roots:
         sha256_fingerprint = cert.fingerprint(hashes.SHA256()).hex()
         subject = cert.subject.rfc4514_string()
         root_entries.append((subject, sha256_fingerprint))
 
-    # Sort alphabetically by subject for easier reference in output file.
+    # Sort alphabetically by subject for easier lookup
     root_entries.sort(key=lambda x: x[0])
 
     with open('logs/_trusted_roots.txt', 'w', encoding='utf-8') as f:
@@ -109,7 +136,7 @@ def get_root_store(custom_roots_dir) -> list[x509.Certificate]:
             f.write(f'{sha256_fingerprint}, {subject}\n')
         logging.info(f'List of trusted roots for this session exported to logs/trusted_roots.txt.')
 
-    return roots
+    return roots, ints
 
 def supported_ciphers_list() -> list[str]:
     """

@@ -35,6 +35,7 @@ ca_org_to_country = {
   "GlobalSign": "BE",
   "Digital Signature Trust Co.": "US",
   "Entrust.net": "US",
+  "Root CA": "AU",                         # http://www.cacert.org
   "TeliaSonera": "SE",
 }
 

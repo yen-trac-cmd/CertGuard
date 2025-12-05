@@ -198,7 +198,6 @@ def request(flow: http.HTTPFlow) -> None:
         while True:
             cert_aki = get_akid(top_of_chain)
             
-            # TODO - Add custom_intermediates folder.  Parse 
             if cert_aki in ints_by_ski:
                 intCA = ints_by_ski[cert_aki]
                 fetched_certs.append(intCA)
@@ -237,8 +236,8 @@ def request(flow: http.HTTPFlow) -> None:
         findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.ERROR, f'⚠️ Server failed to send complete certificate chain.'))
         cert_chain.extend(fetched_certs)
 
-    # Verify full certificate chain and retrieve validated root cert as cryptography.x509.Certificate object.
-    root_cert, claimed_root, verification_error, self_signed = get_root_cert(cert_chain, root, roots_by_ski, root_store)
+    # Verify full certificate chain and retrieve validated root cert.
+    root_cert, claimed_root, verification_error, self_signed = get_root_cert(cert_chain, root, roots_by_ski)
     
     if root_cert:
         root_hash = root_cert.fingerprint(hashes.SHA256()).hex()
@@ -256,7 +255,6 @@ def request(flow: http.HTTPFlow) -> None:
             findings.append(Finding(DisplayLevel.CRITICAL, func_name(), ErrorLevel.CRIT, violation))
         else:
             findings.append(Finding(DisplayLevel.VERBOSE, func_name(), ErrorLevel.NONE, f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;Root CA Operator: {ca_org}'))
-
     elif self_signed:
         #TODO: Add logic for DANE usage type 3, where cert may be self-attested in TLSA record.
         findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.ERROR, f'⚠️ Encountered self-signed certificate:&emsp;&emsp;<b>{self_signed.subject.rfc4514_string()}</b>'))
@@ -272,14 +270,16 @@ def request(flow: http.HTTPFlow) -> None:
             findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.ERROR, '&emsp;&emsp;▶ Server failed to send complete certificate chain.'))
         highest_error_level = ErrorLevel.FATAL.value
         blockpage_color = ErrorLevel.FATAL.color
-        root_hash = f"Unidentified_root - {claimed_root}"
+        #root_hash = f"Unidentified_root - {claimed_root}"
+        root_hash = cert_chain[-1].fingerprint(hashes.SHA256()).hex()
 
     if verification_error:
         logging.error(f'Encountered verification error while building certificate chain: {verification_error}')
         findings.append(Finding(DisplayLevel.CRITICAL, func_name(), ErrorLevel.FATAL, f'⛔ Could not verify certificate chain: {verification_error}'))
         highest_error_level = ErrorLevel.FATAL.value
         blockpage_color = ErrorLevel.FATAL.color
-        root_hash = "Unverified root"
+        #root_hash = "Unverified root"
+        root_hash = cert_chain[-1].fingerprint(hashes.SHA256()).hex()
 
     # Check to see if site is already approved in the database.
     prior_approval = prior_approval_check(flow, cert_chain, quick_check=True)

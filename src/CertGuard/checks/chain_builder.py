@@ -6,14 +6,18 @@ from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519, ed448, d
 from typing import Sequence, Optional, Tuple
 from utils.x509 import calculate_spki_hash, get_akid, get_skid
 
-def get_root_cert(server_chain: Sequence[x509.Certificate], root_cert: Optional[x509.Certificate], trusted_roots_by_ski: dict,
-        root_store: Sequence[x509.Certificate]) -> Tuple[Optional[x509.Certificate], Optional[str], Optional[str], Optional[x509.Certificate]]:
+def get_root_cert(
+        server_chain: Sequence[x509.Certificate], 
+        root_cert: Optional[x509.Certificate], 
+        trusted_roots_by_ski: dict
+    ) -> Tuple[Optional[x509.Certificate], Optional[str], Optional[str], Optional[x509.Certificate]]:
     """
     Given an x509.Certificate chain and trusted root store, attempt to resolve and verify the root CA certificate for the server's certificate chain.
 
     Args:
-        chain (Sequence): Ordered x509 certificate chain presented by the server (leaf first, intermediates, and optionally a root cert)
-        root_store (Sequence[x509.Certificate]): List of trusted root certificates to match against.
+        server_chain:           Ordered x509 certificate chain presented by the server (leaf first, intermediates, and optionally a root cert)
+        root_cert:              Root cert if included in original cert chain from server, or already enumerated from AIA chasing.
+        trusted_roots_by_ski:   List of trusted root certificates to match against.
     Returns:
         Tuple[Optional[x509.Certificate], Optional[str], Optional[str], Optional[x509.Certificate]]: (root_cert, claimed_root, verification_error, self_signed)
             root_cert:          Matched root cert from root_store, or None if no match.
@@ -106,7 +110,6 @@ def get_root_cert(server_chain: Sequence[x509.Certificate], root_cert: Optional[
             last_cert = server_chain[-2]
         root_in_chain = True
 
-    ############ Testing #############
     if root_cert is None:
         error = f'Unable to fetch missing certs from certificate chain to identify root cert.'
         logging.error(error)
@@ -148,41 +151,6 @@ def get_root_cert(server_chain: Sequence[x509.Certificate], root_cert: Optional[
     else:
         logging.error(f"Cert chain not anchored to trusted root CA!")
         return None, last_cert.issuer.rfc4514_string(), None, None
-
-    '''
-    for root in root_store:
-        if root.subject == last_cert.issuer:
-            try:
-                verify_signature(last_cert, root)
-
-                if root_in_chain:
-                    # In this case, the root cert information was already logged earlier and can simply return the verified root,
-                    # provided that it matches the root we identified.
-                    if root == server_chain[-1]:
-                        return root, None, None, None
-                    else:
-                        logging.error("Root supplied in server's cert chain does not match enumerated root from trusted root store.")
-
-                else:
-                    logging.warning('Chain verified against Root CA:')
-                    logging.info  (f'  Subject:                 {root.subject.rfc4514_string()}')
-                    logging.info  (f'  Issuer:                  {root.issuer.rfc4514_string()}')
-                    logging.info  (f'  Serial number:           {root.serial_number}')
-                    logging.info  (f'  Serial number (hex):     {hex(root.serial_number)}')
-                    logging.info  (f'  Not valid before UTC:    {root.not_valid_before_utc}')
-                    logging.info  (f'  Not valid after UTC:     {root.not_valid_after_utc}')
-                    logging.info  (f'  Subject Key ID (SKI):    {get_skid(root).hex()}')
-                    logging.info  (f'  Subject PubKey (SHA256): {calculate_spki_hash(root, "SHA256", hex=True)}'),
-                    logging.info  (f'  Fingerprint (SHA1):      {(root.fingerprint(hashes.SHA1())).hex()}')
-                    logging.info  (f'  Fingerprint (SHA256):    {(root.fingerprint(hashes.SHA256())).hex()}')
-                    return root, None, None, None
-            except Exception as e:
-                logging.error(f"Root CA cert verification failed: {e}")
-                continue
-    
-    logging.error(f"No trust anchor cert found!")
-    return None, last_cert.issuer.rfc4514_string(), None, None
-    '''
 
 def verify_signature(subject: x509.Certificate, issuer: x509.Certificate) -> None:
     """

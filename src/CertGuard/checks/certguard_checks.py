@@ -385,7 +385,7 @@ def prior_approval_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]
     with sqlite3.connect(config.db_path) as conn:
         row = conn.execute("SELECT decision, root FROM decisions WHERE host = ?", (host,)).fetchone()               
         
-        if quick_check == True:
+        if quick_check:# == True:
             logging.info('Performing initial quick check...')
             logging.debug(f'Existing database record for {host}: {row}')
             if row and row[0] == "approved" and row[1] == root_fingerprint:
@@ -396,9 +396,8 @@ def prior_approval_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]
                     logging.info(f"No record for {host} found in database; proceeding with further checks.")
                 return False
         
-        elif quick_check == False:  # Note - Should never get to this code path on subsequent function call if the earlier check above returned True.
+        else:# quick_check == False:  # Note - Should never get to this code path on subsequent function call if the earlier check above returned True.
             logging.info('Performing second-pass check for root cert drift in database.')
-            #if row and row[0] == "approved" and row[1] != root_fingerprint:
             if row and row[1] != root_fingerprint:
                 logging.info(f"Root CA for {host} inconsistent with previously observed!")   
                 violation = f"❌ Root CA for <b>{host}</b> inconsistent with previously observed!"

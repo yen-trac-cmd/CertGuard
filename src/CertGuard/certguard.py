@@ -40,12 +40,19 @@ addons = [ocsp_addon]
 
 log = Logger.get_logger()                                       # Configure file logger
 
-# Load Certifi roots + any custom roots and/or intermediate CA certs 
-root_store, int_store = get_cert_stores(config.custom_roots_dir, config.custom_ints_dir)
+# Load Certifi roots + any custom root, intermediate CA, or deprecated root CA certs 
+root_store, deprecated_store, int_store = get_cert_stores(config.custom_roots_dir, config.deprecated_dir, config.custom_ints_dir)
+
+# Combine trusted roots and deprecated roots for verifying digital signatures when building certificate chains.
+# Note that if a given certificate chains up to a deprecated (but otherwise still valid) root cert, a warning will be raised.
+root_store.extend(deprecated_store)
 
 # Build lookup dictionaries for parent cert discovery by AIA or subject
 roots_by_subject, roots_by_ski = build_cert_index(root_store)
 ints_by_subject,  ints_by_ski  = build_cert_index(int_store)
+
+# List of deprecated CA cert hashes for cross-reference during chain building.
+deprecated_roots: list[Certificate]  = [cert.fingerprint(hashes.SHA256()) for cert in deprecated_store]
 
 approved_hosts = set()
 pending_requests = {}
@@ -102,7 +109,10 @@ def load(loader: addonmanager.Loader) -> None:
             CREATE TABLE IF NOT EXISTS decisions (
                 host TEXT PRIMARY KEY,
                 decision TEXT,
-                root TEXT,
+                root_hash TEXT,
+                subject TEXT,
+                expiry TEXT,
+                tag TEXT,
                 timestamp TEXT
             )
         """)
@@ -212,7 +222,7 @@ def request(flow: http.HTTPFlow) -> None:
                 continue
             elif cert_aki in roots_by_ski:
                 root = roots_by_ski[cert_aki]
-                logging.debug('Identified root via dictionary lookup against AKI.')  # as: {root.subject.rfc4514_string()
+                logging.debug('Identified root via dictionary lookup against AKI.')
                 break
             elif top_of_chain.issuer in roots_by_subject:
                 root = roots_by_subject[top_of_chain.issuer]
@@ -237,40 +247,55 @@ def request(flow: http.HTTPFlow) -> None:
         cert_chain.extend(fetched_certs)
 
     # Verify full certificate chain and retrieve validated root cert.
-    root_cert, claimed_root, verification_error, self_signed = get_root_cert(cert_chain, root, roots_by_ski)
-    
+    root_cert, claimed_root, verification_error, self_signed, tag = get_root_cert(cert_chain, root, roots_by_ski, deprecated_roots)
+
     if root_cert:
+        try:
+            root_cn = root_cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+            root_desc = root_cn[0].value
+        except:
+            root_desc = root_cert.subject.rfc4514_string()
+
         root_hash = root_cert.fingerprint(hashes.SHA256()).hex()
         # Add root cert to chain (if not already present) for a complete / validated chain
         if not root_already_present:
             cert_chain.append(root_cert)
-
+        
+        # Check for Deprecated root
+        if tag == "DEPRECATED":
+            findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.ERROR, f'⚠️ Root certificate (<code>{root_desc}</code>) is deprecated!'))
+        elif tag == "UNTRUSTED":
+            findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.FATAL, f'⛔ Root certificate (<code>{root_desc}</code>) is Untrusted!'))
+        
         # Fetch org name for verbose block pages        
         ca_org = None
         for attr in root_cert.subject.get_attributes_for_oid(NameOID.ORGANIZATION_NAME):
             ca_org = attr.value
-        
         if not ca_org:
-            violation = f"⛔ No Organization (O=) value found in root CA certificate:<br>&emsp;&emsp;▶ <b>{root_cert.subject.rfc4514_string()}</b>"
+            violation = f"⛔ No Organization (O=) value found in root CA certificate:<br>&emsp;&emsp;▶ <b>{root_desc}</b>"
             findings.append(Finding(DisplayLevel.CRITICAL, func_name(), ErrorLevel.CRIT, violation))
         else:
             findings.append(Finding(DisplayLevel.VERBOSE, func_name(), ErrorLevel.NONE, f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;Root CA Operator: {ca_org}'))
+
     elif self_signed:
         #TODO: Add logic for DANE usage type 3, where cert may be self-attested in TLSA record.
         findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.ERROR, f'⚠️ Encountered self-signed certificate:&emsp;&emsp;<b>{self_signed.subject.rfc4514_string()}</b>'))
         highest_error_level = ErrorLevel.ERROR.value
         blockpage_color = ErrorLevel.ERROR.color
         root_hash = self_signed.fingerprint(hashes.SHA256()).hex()
+    
     elif claimed_root:
         #TODO: Add logic for DANE usage type 2, where root may be a private CA.
-        logging.error(f'Could not validate chained cert against claimed Issuer of: {claimed_root}.')
-        findings.append(Finding(DisplayLevel.CRITICAL, func_name(), ErrorLevel.FATAL, f'⛔ Could not validate cert against claimed Issuer cert of:<br>&emsp;&emsp;<b>{claimed_root}</b>'))
+        #logging.error(f'Could not validate chained cert against claimed Issuer of: {claimed_root}.')
+        if tag == "INVALID":
+            findings.append(Finding(DisplayLevel.CRITICAL, func_name(), ErrorLevel.FATAL, f'⛔ Signature on {top_of_chain.subject.rfc4514_string()} failed to verify against claimed root of:<br>&emsp;&emsp;<b>{claimed_root}</b>'))
+        if tag == "ERROR":
+            findings.append(Finding(DisplayLevel.CRITICAL, func_name(), ErrorLevel.FATAL, f'⛔ Error ecountered attempting to validate cert against claimed Issuer cert of:<br>&emsp;&emsp;<b>{claimed_root}</b>'))
         if len(cert_chain) == 1:
             logging.error(f'Server failed to send complete certificate chain.')
             findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.ERROR, '&emsp;&emsp;▶ Server failed to send complete certificate chain.'))
         highest_error_level = ErrorLevel.FATAL.value
         blockpage_color = ErrorLevel.FATAL.color
-        #root_hash = f"Unidentified_root - {claimed_root}"
         root_hash = cert_chain[-1].fingerprint(hashes.SHA256()).hex()
 
     if verification_error:
@@ -362,9 +387,14 @@ def request(flow: http.HTTPFlow) -> None:
         dnssec_check,
     ] 
 
+    for finding in findings:
+        if finding.error_level.value > highest_error_level:
+            highest_error_level = finding.error_level.value
+
+    logging.error(f'highest error_level = {highest_error_level}')
     for check in my_checks:
         finding: Finding = check(flow, cert_chain)
-
+        logging.error(f'finding highest error_level = {finding.error_level} -- value: {finding.error_level.value}')
         if finding.error_level.value > highest_error_level:
             highest_error_level = finding.error_level.value
             blockpage_color = finding.error_level.color

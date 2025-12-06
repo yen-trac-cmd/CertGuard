@@ -3,6 +3,7 @@ import logging
 import requests
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import (rsa, ec, dsa, ed25519, ed448)
 from cryptography.hazmat.primitives.serialization import pkcs7
 from cryptography.x509.oid import AuthorityInformationAccessOID, ExtensionOID
 
@@ -182,3 +183,31 @@ def load_pkcs7_data(pkcs7):
         except Exception:
             continue
     return None
+
+def get_pubkey_info(cert: x509.Certificate) -> tuple[str, int]:
+    key = cert.public_key()
+
+    # RSA
+    if isinstance(key, rsa.RSAPublicKey):
+        return ("RSA", key.key_size)
+
+    # EC
+    if isinstance(key, ec.EllipticCurvePublicKey):
+        curve = key.curve.__class__.__name__
+        return (f"EC ({curve})", key.key_size)
+
+    # DSA
+    if isinstance(key, dsa.DSAPublicKey):
+        return ("DSA", key.key_size)
+
+    # Ed25519
+    if isinstance(key, ed25519.Ed25519PublicKey):
+        return ("Ed25519", key.key_size)
+
+    # Ed448
+    if isinstance(key, ed448.Ed448PublicKey):
+        return ("Ed448", key.key_size)
+
+    # Unknown
+    logging.error(f"Unsupported public key type: {type(key)}")
+    return ("Unknown", "Unknown")

@@ -21,6 +21,7 @@ resolvers = ['1.1.1.1', '8.8.8.8'] # Cloudflare, Quad9, and Google resolvers, re
 # Note: All CA certificate files must have a ".pem" file extension.
 custom_roots_dir = "./custom_CAs/roots/"
 custom_ints_dir  = "./custom_CAs/intermediates/"
+deprecated_dir   = "./custom_CAs/deprecated/"
 
 # Configure path to SQLite database that will hold certificate information & prior approval decisions
 db_path = "./Guard.db"

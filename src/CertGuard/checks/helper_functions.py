@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from glob import glob
 from mitmproxy import http
 from requests_cache import CachedSession
+from typing import Tuple
 from urllib.parse import urlparse
 
 def is_navigation_request(flow: http.HTTPFlow, referer_header, accept_header) -> bool:
@@ -51,19 +52,71 @@ def is_navigation_request(flow: http.HTTPFlow, referer_header, accept_header) ->
     logging.info(f"Could not ascertain new browser navigation; returning False.")
     return False
 
-def get_cert_stores(custom_roots_dir: str, custom_ints_dir: str) -> list[x509.Certificate]:
+def load_pem_bundle(dir_path: str, label: str) -> bytes:
+    """
+    Load all .pem files from a directory into a single bytes bundle.
+    Logs status/error messages consistently.
+    """
+    if not dir_path:
+        return b""
+
+    if not os.path.isdir(dir_path):
+        logging.critical(f"Could not find directory specified for '{label}': {dir_path}.")
+        logging.critical("Please check configuration in config.toml or create/populate the directory.")
+        return b""
+
+    pem_files = glob(os.path.join(dir_path, "*.pem"))
+    logging.info(f"Loading {len(pem_files)} {label} files from {dir_path}.")
+
+    bundle = b""
+    for file in pem_files:
+        with open(file, "rb") as f:
+            bundle += f.read()
+
+    return bundle
+
+def parse_pem_bundle(bundle: bytes, label: str) -> list[x509.Certificate]:
+    """
+    Parse a concatenated PEM bundle containing multiple certificates.
+    Returns a list of x509.Certificate objects.
+    """
+    if not bundle:
+        logging.info(f"No {label} certificates found.")
+        return []
+
+    certs: list[x509.Certificate] = []
+
+    for block in bundle.split(b"-----END CERTIFICATE-----"):
+        block = block.strip()
+        if not block:
+            continue
+
+        pem = block + b"\n-----END CERTIFICATE-----\n"
+
+        try:
+            certs.append(x509.load_pem_x509_certificate(pem, default_backend()))
+        except Exception as e:
+            logging.error(f'Encountered exception while parsing PEM cert data: {e}')
+            pass
+
+    return certs
+
+def get_cert_stores(custom_roots_dir: str, deprecated_dir: str, custom_ints_dir: str) -> Tuple[list[x509.Certificate], list[x509.Certificate]]:
     """
     Loads trusted root certificates from local certifi store, along with any defined custom CA root/intermediate certs.
 
     Args:
         custom_roots_dir:     Directory for additional root CA certs to load beyond what ships in Certifi bundle.
+        deprecated_dir:       Directory for valid, but deprecated root CA certs that can be enumerated from AIA fetching or included in server cert chains.
         custom_ints_dir:      Directory for additional intermediate CA certs to load.  
                               (Sometimes required for servers that fail to send complete certificate chains)
-    
     Returns:
-        roots: List of cryptography.x509.Certificate objects for each Root CA certificate enumerated.
-        ints:  List of cryptography.x509.Certificate objects for each Intermediate CA certificate enumerated.
+        roots:          List of cryptography.x509.Certificate objects for each root CA certificate enumerated.
+        deps:           List of cryptography.x509.Certificate objects for each deprecated root CA certificate enumerated.
+        ints:           List of cryptography.x509.Certificate objects for each intermediate CA certificate enumerated.
     """
+
+    # Load Certifi bundle as starting point for root store
     if not os.path.exists(certifi.where()):
         logging.critical(f"FATAL Error: Cannot locate certifi store at {certifi.where()}. Try updating the 'certifi' package for your OS!")
         sys.exit()
@@ -75,53 +128,19 @@ def get_cert_stores(custom_roots_dir: str, custom_ints_dir: str) -> list[x509.Ce
         base_count = root_bundle.count(b'END CERTIFICATE')
         logging.debug(f'Loaded {base_count} certificates from {certifi.where()}.')
 
-    # Load custom root CA certs
-    if custom_roots_dir != None:
-        if os.path.isdir(custom_roots_dir):
-            pem_files = glob(os.path.join(custom_roots_dir, '*.pem'))
-            logging.info(f'Loading {len(pem_files)} custom root CA cert files from {custom_roots_dir}.')
-            for file in pem_files:
-                with open(file, "rb") as f:
-                    root_bundle += f.read()
-        else:
-            logging.critical(f"Could not find directory specified for 'custom_roots_dir': {custom_roots_dir}.")
-            logging.critical(f"Please check configuration in config.toml file or create/populate custom roots directory.")
+    # Load PEM-encoded certs from disk
+    custom_root_bundle = load_pem_bundle(custom_roots_dir, "custom root CA cert")
+    deprecated_bundle = load_pem_bundle(deprecated_dir, "deprecated CA cert")
+    int_bundle  = load_pem_bundle(custom_ints_dir, "custom intermediate CA cert")
     
-    if custom_ints_dir != None:
-        if os.path.isdir(custom_ints_dir):
-            int_bundle = b""
-            pem_files = glob(os.path.join(custom_ints_dir, '*.pem'))
-            logging.info(f'Loading {len(pem_files)} custom intermediate CA cert files from {custom_ints_dir}.')
-            for file in pem_files:
-                with open(file, "rb") as f:
-                    int_bundle += f.read()
-        else:
-            logging.critical(f"Could not find directory specified for 'custom_ints_dir': {custom_ints_dir}.")
-            logging.critical(f"Please check configuration in config.toml file or create/populate custom intermediates directory.")
+    combined_roots = root_bundle + custom_root_bundle
 
-    roots: list[x509.Certificate] = []
-    for pem_block in root_bundle.split(b"-----END CERTIFICATE-----"):
-        pem_block = pem_block.strip()
-        if pem_block:
-            pem_block += b"\n-----END CERTIFICATE-----\n"
-            try:
-                roots.append(x509.load_pem_x509_certificate(pem_block, default_backend()))
-            except Exception:
-                pass
-    logging.info(f'Total root certificates loaded: {len(roots)}')
+    # Load the PEM data into lists of x509.Certificate objects
+    roots = parse_pem_bundle(combined_roots, "root CA")
+    deps  = parse_pem_bundle(deprecated_bundle, "deprecated CA")
+    ints  = parse_pem_bundle(int_bundle, "intermediate CA")
 
-    ints: list[x509.Certificate] = []
-    for pem_block in int_bundle.split(b"-----END CERTIFICATE-----"):
-        pem_block = pem_block.strip()
-        if pem_block:
-            pem_block += b"\n-----END CERTIFICATE-----\n"
-            try:
-                ints.append(x509.load_pem_x509_certificate(pem_block, default_backend()))
-            except Exception:
-                pass
-    logging.info(f'Total intermediate CA certificates loaded: {len(roots)}')
-
-    # Build list for exporting full root store to '_trusted_roots.txt' reference file.
+    # Build list for exporting root subjects & fingerprints to '_trusted_roots.txt' reference file.
     root_entries = []
     for cert in roots:
         sha256_fingerprint = cert.fingerprint(hashes.SHA256()).hex()
@@ -136,7 +155,7 @@ def get_cert_stores(custom_roots_dir: str, custom_ints_dir: str) -> list[x509.Ce
             f.write(f'{sha256_fingerprint}, {subject}\n')
         logging.info(f'List of trusted roots for this session exported to logs/trusted_roots.txt.')
 
-    return roots, ints
+    return roots, deps, ints
 
 def supported_ciphers_list() -> list[str]:
     """
@@ -226,5 +245,5 @@ def clean_error(html_string: str) -> str:
 def record_decision(db_path, host, decision, root_fingerprint) -> None:
     now = datetime.now(timezone.utc).isoformat()
     with sqlite3.connect(db_path) as conn:
-        conn.execute("REPLACE INTO decisions (host, decision, root, timestamp) VALUES (?, ?, ?, ?)", (host, decision, root_fingerprint, now))
+        conn.execute("REPLACE INTO decisions (host, decision, root_hash, timestamp) VALUES (?, ?, ?, ?)", (host, decision, root_fingerprint, now))
         conn.commit()

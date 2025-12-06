@@ -61,7 +61,6 @@ def load_log_list(old_ct_log: json = None) -> dict:
     logging.info(f'Session cache contains {CT_LOG_LIST_URL}? {session.cache.contains(url=CT_LOG_LIST_URL)}')
     try:
         ct_log_list = session.get(CT_LOG_LIST_URL)
-        #ct_log_list = session.get('https://www.gstatic.com/ct/log_list/v3/log_list.jsonx')   # Bogus URL for fault testing
         ct_log_list.raise_for_status()
         if not ct_log_list.from_cache:
             logging.info(f"Fresh Certificate Transparency Log List downloaded from {CT_LOG_LIST_URL}, Status Code: {ct_log_list.status_code}")
@@ -93,20 +92,22 @@ def load_log_list(old_ct_log: json = None) -> dict:
     mapping = {}
     for log_list in log_lists:
         for operator in log_list.get("operators", []):
-            for entry in operator.get("logs", []):
+            all_entries = operator.get("logs", []) + operator.get("tiled_logs", [])
+            #for entry in operator.get("logs", []):
+            for entry in all_entries:
                 key_b64 = entry.get("key")
                 log_id_b64 = entry.get("log_id")
                 if not key_b64 or not log_id_b64:
                     continue
 
+                # Remove whitespace/linebreaks and extend 'entry' to include log operator name and public key in DER format.
+                key_b64 = "".join(key_b64.split())
+                log_id_b64 = "".join(log_id_b64.split())
+
+                pubkey_der = base64.b64decode(key_b64)
+                log_id_bytes = base64.b64decode(log_id_b64)
+
                 try:
-                    # Remove whitespace/linebreaks and extend 'entry' to include log operator name and public key in DER format.
-                    key_b64 = "".join(key_b64.split())
-                    log_id_b64 = "".join(log_id_b64.split())
-
-                    pubkey_der = base64.b64decode(key_b64)
-                    log_id_bytes = base64.b64decode(log_id_b64)
-
                     pubkey = serialization.load_der_public_key(pubkey_der, backend=default_backend())
                     entry["pubkey"] = pubkey
                     entry["operator_name"] = operator.get("name")
@@ -199,10 +200,6 @@ def extract_scts(cert: x509.Certificate, ct_log_map) -> list[dict]:
         #logging.info(f"SCT log_id {count} (hex): {sct.log_id.hex()}")
         logging.info(f"SCT log_id {count} (b64): {base64.b64encode(sct.log_id).decode()}")
 
-    #if ct_log_map == None:
-    #    error = f"<html><head><title>Error!</title></head><body>Could not load Certificate Transparency log file from {CT_LOG_LIST_URL}!"
-    #    flow.repsonse = http.Response.make(500, error, {"Content-Type": "text/html"})
-
     sct_data = []
     for sct in scts:
         ct_log_entry = ct_log_map.get(sct.log_id)
@@ -224,6 +221,7 @@ def extract_scts(cert: x509.Certificate, ct_log_map) -> list[dict]:
             "ct_log_operator": ct_log_entry.get("operator_name") if ct_log_entry else None,
             "ct_log_key": ct_log_entry.get("key") if ct_log_entry else None,
             "ct_log_url": ct_log_entry.get("url") if ct_log_entry else None,
+            "ct_log_monitoring_url": ct_log_entry.get("monitoring_url") if ct_log_entry else None,
             "ct_log_mmd": ct_log_entry.get("mmd") if ct_log_entry else None,
             "ct_log_state": ct_log_entry.get("state") if ct_log_entry else None,
             "ct_log_temporal_interval": ct_log_entry.get("temporal_interval") if ct_log_entry else None,
@@ -417,7 +415,7 @@ def ctlog_quick_check(flow: http.HTTPFlow, leaf_cert: x509.Certificate) -> Tuple
 
     return found, revoked, None
 
-def verify_inclusion(sct_data: bytes, ct_log_url: str, sct_timestamp: int, log_mmd: int) -> Tuple[bool, Optional[str]]:
+def verify_inclusion(sct_data: bytes, ct_log_url: str, sct_timestamp: int, log_mmd: int, endpoint_type: str) -> Tuple[bool, Optional[str]]:
     """
     Verify inclusion of a leaf hash using SCT data, accounting for Maximum Merge Delay (MMD).
 

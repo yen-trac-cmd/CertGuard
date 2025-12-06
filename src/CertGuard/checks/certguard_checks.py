@@ -10,7 +10,7 @@ from cryptography.hazmat.primitives import hashes
 from checks.dane_logic import DANETLSAValidator
 from datetime import datetime, timedelta, timezone
 from mitmproxy import http
-from typing import Optional, Tuple
+#from typing import Optional, Tuple
 from utils.misc import func_name
 from utils.x509 import get_cert_domains
 
@@ -30,9 +30,7 @@ def root_country_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) 
         cert_chain: The complete, validated certificate chain for the current TLS connection.
 
     Returns:
-        Tuple[ErrorLevel, Optional[str]]: 
-            ErrorLevel: Enum indicating severity of check results.
-            Optional[str]: Description of country violation, or None if not applicable.
+        Finding:    CertGuard Finding data class object
     """
     logging.warning(f"-----------------------------------Entering root_country_check()----------------------------------")
     
@@ -381,9 +379,8 @@ def prior_approval_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]
 
     root_fingerprint = cert_chain[-1].fingerprint(hashes.SHA256()).hex()
     
-    # TODO: Extend this to examine additional root cert parameters.
     with sqlite3.connect(config.db_path) as conn:
-        row = conn.execute("SELECT decision, root FROM decisions WHERE host = ?", (host,)).fetchone()               
+        row = conn.execute("SELECT decision, root_hash FROM decisions WHERE host = ?", (host,)).fetchone()               
         
         if quick_check:# == True:
             logging.info('Performing initial quick check...')
@@ -453,11 +450,19 @@ def sct_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Findin
 
         # Cryptographically audit CT log inclusion (if enabled)
         if validated and config.verify_inclusion:
-            included, error = verify_inclusion(leaf_struct, sct["ct_log_url"], sct["timestamp_unix"], sct["ct_log_mmd"])
-            if included:
-                logging.info(f" Inclusion in {sct["ct_log_description"]} verified")    
+            url = sct.get("ct_log_url")   # URL for CTv1 / RFC6962 API endpoints
+            if url:
+                endpoint_type = 'RFC6962'
+                included, error = verify_inclusion(leaf_struct, url, sct["timestamp_unix"], sct["ct_log_mmd"], endpoint_type)
+                if included:
+                    logging.info(f" Inclusion in {sct["ct_log_description"]} verified")    
+                else:
+                    warnings.append(f'⚠️ {error}')
             else:
-                warnings.append(f'⚠️ {error}')
+                # TODO: Add support for tiled CT Logs
+                url = sct.get("ct_log_monitoring_url")
+                endpoint_type = 'Static'
+                logging.warning(f'The Static API for tiled Certificate Transparency logs is not supported at this time; skipping inclusion proof for SCT #{i}.')
 
     if violations:
         return Finding(DisplayLevel.CRITICAL, func_name(), ErrorLevel.FATAL, f'{"<br>".join(violations)}')

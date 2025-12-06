@@ -10,10 +10,8 @@ from cryptography.hazmat.primitives import hashes
 from checks.dane_logic import DANETLSAValidator
 from datetime import datetime, timedelta, timezone
 from mitmproxy import http
-#from typing import Optional, Tuple
 from utils.misc import func_name
 from utils.x509 import get_cert_domains
-
 
 config = Config()
 dane_validator = DANETLSAValidator()
@@ -114,11 +112,11 @@ def controlled_CA_checks(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]
         - cert_chain:   The complete, validated certificate chain for the current TLS connection.
 
     ### Returns:
-        - tuple[ErrorLevel, Optional[str]]:
-        A two-element tuple `(ErrorLevel, message)` indicating the result of the check.
-            - `ErrorLevel.FATAL`, message — if the root CA is explicitly prohibited.
-            - `ErrorLevel.CRIT`, message — if the root CA is restricted.
-            - `ErrorLevel.NONE`, `None` — if no restrictions or violations are detected.
+        - Finding:      CertGuard Finding data class object
+        The ErrorLevels embedded into the Finding object can be one of three values:
+            - `ErrorLevel.FATAL` - if the root CA is explicitly prohibited.
+            - `ErrorLevel.CRIT`  - if the root CA is restricted.
+            - `ErrorLevel.NONE`  - if no restrictions or violations are detected.
     """
     logging.warning("-----------------------------------Entering controlled_CA_checks()--------------------------------")
     identifiers=[]
@@ -363,13 +361,13 @@ def prior_approval_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]
                         fingerprint match a previously approved record. Defaults to False.
 
     Returns:
-        bool | tuple[ErrorLevel, Optional[str]]:
+        bool | Finding:
             - If `quick_check` is True:
                 - `True` if the host/root pair matches an existing "approved" record.
                 - `False` if no record exists or the fingerprints differ.
             - If `quick_check` is False:
-                - `(ErrorLevel.CRIT, str)` if a mismatch is detected.
-                - `(ErrorLevel.NONE, None)` if no issues or no record found.
+                - A `Finding` object with embedded `ErrorLevel.CRIT` if a mismatch is detected.
+                - A `Finding` object with embedded `ErrorLevel.NONE` if no issues or no record found.
     """
     logging.warning("-----------------------------------Entering prior_approval_check()--------------------------------")
     # If refactor this function as a class, can persist the 'row' value below so there's only one SQL query
@@ -536,7 +534,7 @@ def caa_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Findin
         cert_chain: The complete, validated certificate chain for the current TLS connection.
 
     Returns:
-        tuple[ErrorLevel, str]: A tuple consisting of the ErrorLevel (based on the verdict for the CAA verification logic) and, if applicable, a string 
+        Finding:  A `Finding` object with an embedded ErrorLevel based on the verdict for the CAA verification logic and, if applicable, a string 
         capturing the violation(s) encountered.
     """
     logging.warning("-----------------------------------Entering verify_cert_caa()-------------------------------------")
@@ -632,8 +630,12 @@ def dane_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Findi
             return Finding(DisplayLevel.CRITICAL, func_name(), ErrorLevel.CRIT, f'{dane_validator.violation}')
 
 def dnssec_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Finding:
+    """ 
+    An imperfect, but low-cost extra check to see if a domain is DNSSEC-signed by leveraging the existing DANE TLSA record check. This check 
+    will under-report the number of signed zones given the somewhat atypical record type for the DANE query, but those reported as signed WILL be signed.
+    """
     logging.warning(f"-----------------------------------Entering dnssec_check()----------------------------------------")
-    if dane_validator.authenticated_data:     # Save an additional DNS lookup by leveraging the existing DANE TLSA record check.
+    if dane_validator.authenticated_data:
         logging.debug('DNSSEC is enabled for zone.')
         return Finding(DisplayLevel.POSITIVE, func_name(), ErrorLevel.NONE, f'✅ The DNS zone is DNSSEC-signed and has a valid chain of trust.')
     else:

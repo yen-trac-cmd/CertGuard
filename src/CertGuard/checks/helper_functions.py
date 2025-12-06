@@ -242,8 +242,15 @@ def clean_error(html_string: str) -> str:
     
     return clean_error_text
 
-def record_decision(db_path, host, decision, root_fingerprint) -> None:
+def record_decision(db_path, host, decision, root_fingerprint, root_subject, root_expiry, tag) -> None:
     now = datetime.now(timezone.utc).isoformat()
     with sqlite3.connect(db_path) as conn:
-        conn.execute("REPLACE INTO decisions (host, decision, root_hash, timestamp) VALUES (?, ?, ?, ?)", (host, decision, root_fingerprint, now))
+        conn.execute(
+            """
+            REPLACE INTO decisions 
+                (host, decision, root_hash, subject, expiry, tag, timestamp) 
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, 
+            (host, decision, root_fingerprint, root_subject, root_expiry, tag, now)
+        )
         conn.commit()

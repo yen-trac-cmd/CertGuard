@@ -18,21 +18,22 @@ def get_root_cert(
     Given an x509.Certificate chain and trusted root store, attempt to resolve and verify the root CA certificate for the server's certificate chain.
 
     Args:
-        server_chain:           Ordered x509 certificate chain presented by the server (leaf first, intermediates, and optionally a root cert)
-        root_cert:              Root cert if included in original cert chain from server, or already enumerated from AIA chasing.
-        trusted_roots_by_ski:   List of trusted root certificates to match against.
+        server_chain:            Ordered x509 certificate chain presented by the server (leaf first, intermediates, and optionally a root cert)
+        root_cert:               Root cert if included in original cert chain from server, or already enumerated from AIA chasing.
+        trusted_roots_by_ski:    List of trusted root certificates to match against.
     Returns:
         Tuple[Optional[x509.Certificate], Optional[str], Optional[str], Optional[x509.Certificate]]: (root_cert, claimed_root, verification_error, self_signed)
-            root_cert:          Matched root cert from root_store, or None if no match.
-            claimed_root:       CN (preferred) or full RFC 4514 subject string of the matched root cert, or None if no root identified.
-            verification_error: Any error encountered during certificate chain verification
-            self_signed:        Self-signed x509.Certificate object
-            tag:                "trusted", "deprecated", "untrusted", "unknown", or "invalid".
+          1. root_cert:          Matched root cert from root_store, or None if no match.
+          2. claimed_root:       CN (preferred) or full RFC 4514 subject string of the matched root cert, or None if no root identified.
+          3. verification_error: Any error encountered during certificate chain verification
+          4.  self_signed:       Self-signed x509.Certificate object
+          5. tag:                "Trusted", "DEPRECATED", "UNTRUSTED", "UNKNOWN", "ERROR", or "INVALID".
               - Trusted roots are those found in local root trust store.
               - Deprecated roots are those that, while still technically valid, are considered deprecated by common root programs.
               - Untrusted roots are those enumerated through AIA fetching and and not present in local trust store.
               - Unknown roots are not present in the local store and cannot be fetched via AIA.
               - An "invalid" tag indicates that the provided cert chain does not cryptographically verify against the supplied (or fetched) root.
+              - The "error" tag indicates some other type of exception occurred while attempting to verify a digital signature.
 
     """
     logging.warning(f"-----------------------------------Entering get_root_cert()---------------------------------------")
@@ -40,18 +41,19 @@ def get_root_cert(
     for i, cert in enumerate(server_chain):
         logging.debug(f'Cert #{i}: subject = {cert.subject.rfc4514_string()}')
         logging.debug(f'Cert #{i}: issuer  = {cert.issuer.rfc4514_string()}')
-        logging.debug(f'Cert #{i}: hash: {cert.fingerprint(hashes.SHA256()).hex()}')
+        #logging.debug(f'Cert #{i}: hash: {cert.fingerprint(hashes.SHA256()).hex()}')
         logging.debug('------------------')
 
     logging.info(f'Length of presented chain: {len(server_chain)}')
 
     for i, cert in enumerate(server_chain):
         # Label selection logic
-        if i == 0:
-            label = "Leaf cert"
+        if cert.subject == cert.issuer and len(server_chain) == 1:
+            label = "Unchained cert"
         elif cert.subject == cert.issuer:
-            #label = "Root cert"
-            continue
+            label = "Root cert"
+        elif i == 0:
+            label = "Leaf cert"
         elif i == 1:
             label = "Issuing CA"
         else:
@@ -69,8 +71,8 @@ def get_root_cert(
             "Serial number (hex)": hex(cert.serial_number),
             "Not valid before UTC": cert.not_valid_before_utc,
             "Not valid after UTC": cert.not_valid_after_utc,
-            #"Public Key Algorithm": f'{algo}-{bitlength}',
-            #"Signature Algorithm": cert.signature_algorithm_oid._name,
+            "Public Key Algorithm": f'{algo}-{bitlength}',
+            "Signature Algorithm": cert.signature_algorithm_oid._name,
             "Authority Key ID (AKI)": aki_extension,
             "Subject Key ID (SKI)": get_skid(cert).hex(),
             "Subject PubKey (SHA256)": calculate_spki_hash(cert, "SHA256", hex=True),
@@ -82,10 +84,13 @@ def get_root_cert(
         max_key_len = max(len(k) for k in fields)
         pad = max_key_len + 2
 
-        logging.warning(f"{label}:")
-        for key, value in fields.items():
-            prefix = f"  {key + ':':<{pad}}"
-            logging.info(f"{prefix}{value}")
+        if label == "Root cert":
+            pass
+        else:
+            logging.warning(f"{label}:")
+            for key, value in fields.items():
+                prefix = f"  {key + ':':<{pad}}"
+                logging.info(f"{prefix}{value}")
 
     # Check for unchained or self-signed cert...
     if len(server_chain) == 1:
@@ -183,7 +188,9 @@ def verify_signature(subject: x509.Certificate, issuer: x509.Certificate) -> Non
     """
     Cryptographically verify that `issuer` signed `subject`.
     
-    Handles RSA (PKCS#1 v1.5 and basic PSS), ECDSA, Ed25519/Ed448, and DSA.
+    Supports RSA (PKCS#1 v1.5 and basic PSS), ECDSA, Ed25519/Ed448, and DSA.
+
+    Raises TypeError if cannot determine digital signature type.
     """
         
     pubkey = issuer.public_key()
@@ -220,7 +227,7 @@ def verify_signature(subject: x509.Certificate, issuer: x509.Certificate) -> Non
     else:
         raise TypeError(f"Unsupported public key type: {type(pubkey)}")
 
-def deduplicate_chain(cert_chain: Sequence[x509.Certificate]) -> Sequence[x509.Certificate]:
+def deduplicate_chain(cert_chain: Sequence[x509.Certificate]) -> Tuple[Sequence[x509.Certificate], Optional[str]]:
     """ Removes duplicate certs from provided certificate chain """
     seen = set()
     unique_chain = []
@@ -267,8 +274,8 @@ def find_leaf_cert(chain: list[x509.Certificate]) -> x509.Certificate:
 def find_parent(child: x509.Certificate, by_subject: dict, by_skid: dict) -> Optional[x509.Certificate]:
     """
     Find parent certificate using:
-    1. Issuer DN → Subject DN match
-    2. AKID → SKID match (fallback)
+    1. Issuer DN -> Subject DN match
+    2. AKID -> SKID match (fallback)
     """
     # Primary: Match by DN
     parent = by_subject.get(child.issuer.rfc4514_string())
@@ -291,16 +298,17 @@ def normalize_chain(chain: list[x509.Certificate]) -> Tuple[Sequence[x509.Certif
         
     Returns:
         ordered:    List of certificates ordered from leaf to root
-        findings:   
-        
-    Raises:
-        ValueError: If leaf certificate cannot be determined
+        findings:   Warnings encountered during normalization routines
+
     """
     logging.warning("-----------------------------------Entering normalize_chain()-------------------------------------")
     findings = []
     logging.debug(f'Found {len(chain)} certs in server-supplied chain prior to de-duplication & reordering:')
     for i, cert in enumerate(chain):
         logging.debug(f' - Cert {i}: {cert.subject.rfc4514_string()}')
+        #from cryptography.hazmat.primitives import serialization
+        #pem_bytes = cert.public_bytes(encoding=serialization.Encoding.PEM)
+        #logging.debug(pem_bytes.decode('utf-8'))
 
     # Remove duplicates
     chain, dups = deduplicate_chain(chain)

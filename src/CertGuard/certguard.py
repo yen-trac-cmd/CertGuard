@@ -198,6 +198,9 @@ def request(flow: http.HTTPFlow) -> None:
     fetched_certs = []
     top_of_chain = cert_chain[-1]
     root = None
+    root_hash = None
+    root_subject = None
+    root_expiry = None
 
     if top_of_chain.subject == top_of_chain.issuer:
         root_already_present = True
@@ -250,13 +253,12 @@ def request(flow: http.HTTPFlow) -> None:
     root_cert, claimed_root, verification_error, self_signed, tag = get_root_cert(cert_chain, root, roots_by_ski, deprecated_roots)
 
     if root_cert:
-        try:
-            root_cn = root_cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
-            root_desc = root_cn[0].value
-        except:
-            root_desc = root_cert.subject.rfc4514_string()
-
+        root_cn = root_cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+        root_desc = root_cn[0].value if root_cn else root_cert.subject.rfc4514_string()
         root_hash = root_cert.fingerprint(hashes.SHA256()).hex()
+        root_subject = root_cert.subject.rfc4514_string()
+        root_expiry = root_cert.not_valid_after_utc
+        
         # Add root cert to chain (if not already present) for a complete / validated chain
         if not root_already_present:
             cert_chain.append(root_cert)
@@ -264,8 +266,10 @@ def request(flow: http.HTTPFlow) -> None:
         # Check for Deprecated root
         if tag == "DEPRECATED":
             findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.ERROR, f'⚠️ Root certificate (<code>{root_desc}</code>) is deprecated!'))
+            blockpage_color = ErrorLevel.ERROR.color
         elif tag == "UNTRUSTED":
             findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.FATAL, f'⛔ Root certificate (<code>{root_desc}</code>) is Untrusted!'))
+            blockpage_color = ErrorLevel.FATAL.color
         
         # Fetch org name for verbose block pages        
         ca_org = None
@@ -283,6 +287,8 @@ def request(flow: http.HTTPFlow) -> None:
         highest_error_level = ErrorLevel.ERROR.value
         blockpage_color = ErrorLevel.ERROR.color
         root_hash = self_signed.fingerprint(hashes.SHA256()).hex()
+        root_subject = self_signed.subject.rfc4514_string()
+        root_expiry = self_signed.not_valid_after_utc
     
     elif claimed_root:
         #TODO: Add logic for DANE usage type 2, where root may be a private CA.
@@ -297,14 +303,20 @@ def request(flow: http.HTTPFlow) -> None:
         highest_error_level = ErrorLevel.FATAL.value
         blockpage_color = ErrorLevel.FATAL.color
         root_hash = cert_chain[-1].fingerprint(hashes.SHA256()).hex()
+        root_subject = claimed_root
+        root_expiry = cert_chain[-1].not_valid_after_utc
 
     if verification_error:
         logging.error(f'Encountered verification error while building certificate chain: {verification_error}')
         findings.append(Finding(DisplayLevel.CRITICAL, func_name(), ErrorLevel.FATAL, f'⛔ Could not verify certificate chain: {verification_error}'))
         highest_error_level = ErrorLevel.FATAL.value
         blockpage_color = ErrorLevel.FATAL.color
-        #root_hash = "Unverified root"
-        root_hash = cert_chain[-1].fingerprint(hashes.SHA256()).hex()
+        if not root_hash:
+            root_hash = cert_chain[-1].fingerprint(hashes.SHA256()).hex()
+        if not root_subject:
+            root_subject = cert_chain[-1].subject.rfc4514_string()
+        if not root_expiry:
+             root_expiry = cert_chain[-1].not_valid_after_utc
 
     # Check to see if site is already approved in the database.
     prior_approval = prior_approval_check(flow, cert_chain, quick_check=True)
@@ -349,7 +361,7 @@ def request(flow: http.HTTPFlow) -> None:
             flow.response = http.Response.make(302, b"", {"Location": flow.request.url})
 
         logging.warning(f"User has accepted warnings for {host} via token: {token}.  Decision will be persisted to database & cached for this session.")
-        record_decision(config.db_path, host, "approved", root_hash)
+        record_decision(config.db_path, host, "approved", root_hash, root_subject, root_expiry, tag)
         approved_hosts.add(host)
         return
 
@@ -373,16 +385,16 @@ def request(flow: http.HTTPFlow) -> None:
     my_checks = [
         dane_check,
         root_country_check,     # Optional for mass scanning
-        controlled_CA_checks,   # Optional for mass scanning
+        #controlled_CA_checks,   # Optional for mass scanning
         expiry_check, 
         revocation_checks, 
         identity_check, 
         critical_ext_check,
-        prior_approval_check,   # Optional for mass scanning
+        #prior_approval_check,   # Optional for mass scanning
         sct_check, 
         #ct_quick_check,         # Can use this or the sct_check() and revocation_checks() for more thorough (albeit slower) validation.
         caa_check,
-        test_check,
+        #test_check,
         x509_version_check,
         dnssec_check,
     ] 
@@ -414,13 +426,13 @@ def request(flow: http.HTTPFlow) -> None:
     if highest_error_level > ErrorLevel.NONE.value:
         display_messages = [f.message for f in filtered_findings]
         error_screen(config, flow, token, blockpage_color, display_messages, highest_error_level)
-        record_decision(config.db_path, host, "blocked", root_hash)
+        record_decision(config.db_path, host, "blocked", root_hash, root_subject, root_expiry, tag)
         logging.error(f"Request to {host} blocked; Token={token}")
     else:
         # If all checks have passed for a main page navigation, for performance reasons treat domain as cleared for remainder of mitmproxy session.
         logging.info(f'All checks passed for {host}; caching as cleared host for this CertGuard session.')
         approved_hosts.add(host)
-        record_decision(config.db_path, host, "allowed", root_hash)
+        record_decision(config.db_path, host, "allowed", root_hash, root_subject, root_expiry, tag)
         #logging.info(f'Approved & cleared hosts after adding in final block: {approved_hosts}')
 
 def response(flow: http.HTTPFlow) -> None:

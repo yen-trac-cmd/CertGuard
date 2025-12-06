@@ -391,10 +391,8 @@ def request(flow: http.HTTPFlow) -> None:
         if finding.error_level.value > highest_error_level:
             highest_error_level = finding.error_level.value
 
-    logging.error(f'highest error_level = {highest_error_level}')
     for check in my_checks:
         finding: Finding = check(flow, cert_chain)
-        logging.error(f'finding highest error_level = {finding.error_level} -- value: {finding.error_level.value}')
         if finding.error_level.value > highest_error_level:
             highest_error_level = finding.error_level.value
             blockpage_color = finding.error_level.color

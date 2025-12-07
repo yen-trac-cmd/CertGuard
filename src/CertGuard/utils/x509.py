@@ -97,7 +97,13 @@ def fetch_issuer_certificate(cert: x509.Certificate, already_fetched_certs:list[
     Extracts the CA Issuer URL from the AIA extension (if present),
     downloads the certificate, and returns it as an x509.Certificate object.
     Supports DER, PEM, and PKCS#7 (.p7b/.p7c) encoded responses.
-    Returns None if no issuer url is present in AIA, or if cert/bundle is not downloadable.
+    
+    Args:
+        - cert:                     Certificate from which to extract the AIA and fetch issuer certificate for.
+        - already_fetched_certs:    List of certificates already fetched via AIA to prevent circular lookups
+    Returns:
+        - None:                     If no issuer url is present in AIA, or if cert/bundle is not downloadable.
+        - Certificate (c):          If x.509 Certificate fetched or extracted from retrieved PKCS#7 bundle.
     """
     logging.warning(f"-----------------------------------Entering fetch_issuer_certificate()----------------------------")
     

@@ -5,7 +5,7 @@ import sqlite3
 import sys
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import hashes, serialization
 from datetime import datetime, timedelta, timezone
 from glob import glob
 from mitmproxy import http
@@ -101,7 +101,7 @@ def parse_pem_bundle(bundle: bytes, label: str) -> list[x509.Certificate]:
 
     return certs
 
-def get_cert_stores(custom_roots_dir: str, deprecated_dir: str, custom_ints_dir: str) -> Tuple[list[x509.Certificate], list[x509.Certificate]]:
+def get_cert_stores(custom_roots_dir: str, deprecated_dir: str, custom_ints_dir: str, cache_dir: str) -> Tuple[list[x509.Certificate], list[x509.Certificate]]:
     """
     Loads trusted root certificates from local certifi store, along with any defined custom CA root/intermediate certs.
 
@@ -110,10 +110,12 @@ def get_cert_stores(custom_roots_dir: str, deprecated_dir: str, custom_ints_dir:
         deprecated_dir:       Directory for valid, but deprecated root CA certs that can be enumerated from AIA fetching or included in server cert chains.
         custom_ints_dir:      Directory for additional intermediate CA certs to load.  
                               (Sometimes required for servers that fail to send complete certificate chains)
+        cache_dir:            Directory for cached CAs fetched via AIA.
     Returns:
         roots:          List of cryptography.x509.Certificate objects for each root CA certificate enumerated.
         deps:           List of cryptography.x509.Certificate objects for each deprecated root CA certificate enumerated.
         ints:           List of cryptography.x509.Certificate objects for each intermediate CA certificate enumerated.
+        cache:          List of cryptography.x509.Certificate objects for each cached CA certificate enumerated.
     """
 
     # Load Certifi bundle as starting point for root store
@@ -130,15 +132,17 @@ def get_cert_stores(custom_roots_dir: str, deprecated_dir: str, custom_ints_dir:
 
     # Load PEM-encoded certs from disk
     custom_root_bundle = load_pem_bundle(custom_roots_dir, "custom root CA cert")
-    deprecated_bundle = load_pem_bundle(deprecated_dir, "deprecated CA cert")
-    int_bundle  = load_pem_bundle(custom_ints_dir, "custom intermediate CA cert")
+    deprecated_bundle  = load_pem_bundle(deprecated_dir, "deprecated CA cert")
+    int_bundle         = load_pem_bundle(custom_ints_dir, "custom intermediate CA cert")
+    cache_bundle       = load_pem_bundle(cache_dir, "cached CA cert")
     
     combined_roots = root_bundle + custom_root_bundle
 
     # Load the PEM data into lists of x509.Certificate objects
-    roots = parse_pem_bundle(combined_roots, "root CA")
-    deps  = parse_pem_bundle(deprecated_bundle, "deprecated CA")
-    ints  = parse_pem_bundle(int_bundle, "intermediate CA")
+    roots  = parse_pem_bundle(combined_roots, "root CA")
+    deps   = parse_pem_bundle(deprecated_bundle, "deprecated CA")
+    ints   = parse_pem_bundle(int_bundle, "intermediate CA")
+    cached = parse_pem_bundle(cache_bundle, "cached CA")
 
     # Build list for exporting root subjects & fingerprints to '_trusted_roots.txt' reference file.
     root_entries = []
@@ -155,7 +159,7 @@ def get_cert_stores(custom_roots_dir: str, deprecated_dir: str, custom_ints_dir:
             f.write(f'{sha256_fingerprint}, {subject}\n')
         logging.info(f'List of trusted roots for this session exported to logs/trusted_roots.txt.')
 
-    return roots, deps, ints
+    return roots, deps, ints, cached
 
 def supported_ciphers_list() -> list[str]:
     """
@@ -254,3 +258,24 @@ def record_decision(db_path, host, decision, root_fingerprint, root_subject, roo
             (host, decision, root_fingerprint, root_subject, root_expiry, tag, now)
         )
         conn.commit()
+
+def cache_cert(cert: x509.Certificate, cert_ski_hex: str, cached_dir: str) -> None:
+    """ Save provided certificate to cache directory for future lookups """
+     
+     # Ensure cache directory exists
+    os.makedirs(cached_dir, exist_ok=True)
+    pem_path = os.path.join(cached_dir, f"{cert_ski_hex}.pem")
+
+    # Check if already cached on disk
+    if os.path.exists(pem_path):
+        logging.info(f"Certificate for SKI {cert_ski_hex} already found on disk: {pem_path}")
+
+    # Convert to PEM and store to disk    
+    cert_pem_bytes = cert.public_bytes(encoding=serialization.Encoding.PEM)
+    with open(pem_path, "wb") as f:
+        f.write(cert_pem_bytes) #.decode('utf-8')
+        logging.info(f"Saved certificate to {pem_path}")
+
+
+
+    

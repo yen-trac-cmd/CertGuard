@@ -17,11 +17,14 @@ dns_timeout = 1.5
 resolvers = ['1.1.1.1', '8.8.8.8'] # Cloudflare, Quad9, and Google resolvers, respectively, but note that using public resolvers over insecure channels introduces significant risks.
 #resolvers = ['127.0.0.1']
 
-# OPTIONAL: Provide the path to a directory that contains custom root and/or interemdiate CA certificate files in PEM format.
+# Provide the path to a directory that contains custom root and/or interemdiate CA certificate files in PEM format.
+# Deprecated root CA certs can be placed into the directory defined by 'deprecated_dir' to allow for chain building, but will result in a warning.
+# The cached_dir entry is important to improve CertGuard efficiency by reducing the need to AIA-fetch certificates missing from cert chains provided by webservers.
 # Note: All CA certificate files must have a ".pem" file extension.
 custom_roots_dir = "./custom_CAs/roots/"
 custom_ints_dir  = "./custom_CAs/intermediates/"
 deprecated_dir   = "./custom_CAs/deprecated/"
+cached_dir       = "./custom_CAs/cached/"
 
 # Configure path to SQLite database that will hold certificate information & prior approval decisions
 db_path = "./Guard.db"

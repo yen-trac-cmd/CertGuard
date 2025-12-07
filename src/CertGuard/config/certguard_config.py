@@ -78,6 +78,7 @@ class Config:
         self.custom_roots_dir  = cfg["general"].get("custom_roots_dir", None)
         self.custom_ints_dir   = cfg["general"].get("custom_ints_dir", None)
         self.deprecated_dir    = cfg["general"].get("deprecated_dir", None)
+        self.cached_dir        = cfg["general"].get("cached_dir", None)
         self.bp_verbosity      = cfg["general"].get("blockpage_verbosity", 0)        
         self.min_tls_version   = cfg.get("tls_config", {}).get("min_tls_version", 1.2)
         ciphersuite_val        = cfg.get("tls_config", {}).get("ciphersuites", None)

@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 from requests.exceptions import RequestException
 from typing import Tuple, Optional
 from urllib3.exceptions import NameResolutionError
-from utils.x509 import fetch_issuer_certificate
 from utils.misc import get_hash_algorithm_from_oid, get_ocsp_oid_name
 
 def check_cert_chain_revocation(cert_chain: list[x509.Certificate], stapled_response: bytes, timeout: int = 10) -> Tuple[bool, str, Optional[int], Optional[str], Optional[str]]:
@@ -108,10 +107,7 @@ def check_cert_revocation(cert: x509.Certificate, issuer_cert: x509.Certificate 
 
     # If working with unchained cert (or incomplete chain), attempt to fetch Issuer cert
     if issuer_cert == None:
-        logging.warning('Incomplete certificate chain; attempting to fetch issuer CA cert.')
-        issuer_cert = fetch_issuer_certificate(cert)
-    if not issuer_cert:
-        error_msg = (f'Unable to fetch Issuer cert to perform revocation checks.')
+        error_msg = 'Revocation checking requires access to Issuer cert, but none was identified.'
         logging.error(error_msg)
         return (False, error_msg, None, None)
 

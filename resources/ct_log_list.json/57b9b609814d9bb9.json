@@ -1,8 +1,8 @@
 {
-  "created_at": "2025-12-07T19:48:59.360730+00:00",
-  "elapsed": 0.063615,
+  "created_at": "2025-12-14T14:51:32.302028+00:00",
+  "elapsed": 0.060385,
   "encoding": "UTF-8",
-  "expires": "2025-12-08T19:48:59.360693+00:00",
+  "expires": "2025-12-15T14:51:32.301986+00:00",
   "headers": {
     "Accept-Ranges": "bytes",
     "Access-Control-Allow-Origin": "*",
@@ -10,14 +10,14 @@
     "Cache-Control": "public, max-age=3000",
     "Content-Disposition": "attachment; filename=\"log_list.json\"",
     "Content-Encoding": "br",
-    "Content-Length": "9795",
+    "Content-Length": "9929",
     "Content-Security-Policy": "require-trusted-types-for 'script'; report-uri https://csp.withgoogle.com/csp/cert-log-ninjas",
     "Content-Type": "application/json; charset=UTF-8",
     "Cross-Origin-Opener-Policy": "same-origin; report-to=\"cert-log-ninjas\"",
     "Cross-Origin-Resource-Policy": "cross-origin",
-    "Date": "Sun, 07 Dec 2025 19:48:59 GMT",
-    "Expires": "Sun, 07 Dec 2025 20:38:59 GMT",
-    "Last-Modified": "Sun, 07 Dec 2025 15:12:53 GMT",
+    "Date": "Sun, 14 Dec 2025 14:51:32 GMT",
+    "Expires": "Sun, 14 Dec 2025 15:41:32 GMT",
+    "Last-Modified": "Sun, 14 Dec 2025 14:49:06 GMT",
     "Report-To": "{\"group\":\"cert-log-ninjas\",\"max_age\":2592000,\"endpoints\":[{\"url\":\"https://csp.withgoogle.com/csp/report-to/cert-log-ninjas\"}]}",
     "Server": "sffe",
     "Vary": "Accept-Encoding",
@@ -31,7 +31,7 @@
       "Accept": "*/*",
       "Accept-Encoding": "gzip, deflate, br, zstd",
       "Connection": "keep-alive",
-      "If-Modified-Since": "Fri, 05 Dec 2025 14:13:10 GMT",
+      "If-Modified-Since": "Sun, 07 Dec 2025 15:12:53 GMT",
       "User-Agent": "python-requests/2.32.3"
     },
     "method": "GET",
@@ -40,8 +40,8 @@
   "status_code": 200,
   "url": "https://www.gstatic.com/ct/log_list/v3/log_list.json",
   "_decoded_content": {
-    "version": "77.6",
-    "log_list_timestamp": "2025-12-07T12:52:59Z",
+    "version": "78.3",
+    "log_list_timestamp": "2025-12-14T12:53:08Z",
     "operators": [
       {
         "name": "Google",
@@ -740,8 +740,12 @@
             "url": "https://oak.ct.letsencrypt.org/2025h2/",
             "mmd": 86400,
             "state": {
-              "usable": {
-                "timestamp": "2023-11-26T12:00:00Z"
+              "readonly": {
+                "timestamp": "2025-12-12T22:30:00Z",
+                "final_tree_head": {
+                  "sha256_root_hash": "fn06m+bnTrDRl01hT1F1TdZPYfxciFZZn7NAayeGOVQ=",
+                  "tree_size": 1958525022
+                }
               }
             },
             "temporal_interval": {
@@ -756,8 +760,12 @@
             "url": "https://oak.ct.letsencrypt.org/2026h1/",
             "mmd": 86400,
             "state": {
-              "usable": {
-                "timestamp": "2024-11-04T00:00:00Z"
+              "readonly": {
+                "timestamp": "2025-12-12T22:30:00Z",
+                "final_tree_head": {
+                  "sha256_root_hash": "deSRNfTNPgd9wfzoXIznvi+QUTxuK0R+daC6JGKGK3Q=",
+                  "tree_size": 598614696
+                }
               }
             },
             "temporal_interval": {
@@ -772,8 +780,12 @@
             "url": "https://oak.ct.letsencrypt.org/2026h2/",
             "mmd": 86400,
             "state": {
-              "usable": {
-                "timestamp": "2024-11-04T00:00:00Z"
+              "readonly": {
+                "timestamp": "2025-12-12T22:30:00Z",
+                "final_tree_head": {
+                  "sha256_root_hash": "uTgg1k3DUbSFFdXewyyxbsQuCc9RupplMphTwtXqvf4=",
+                  "tree_size": 130815692
+                }
               }
             },
             "temporal_interval": {

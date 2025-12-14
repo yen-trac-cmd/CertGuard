@@ -140,7 +140,7 @@ class Logger:
         date_format = '%Y-%m-%dT%H:%M:%S'
 
         formatter = logging.Formatter(log_format, datefmt=date_format)
-        file_handler = RotatingFileHandler(self.log_file, maxBytes=5*1048576, backupCount=7)
+        file_handler = RotatingFileHandler(self.log_file, maxBytes=5*1048576, backupCount=50)
         file_handler.setFormatter(formatter)
         file_handler.setLevel(logging.DEBUG)
 

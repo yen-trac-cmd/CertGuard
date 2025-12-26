@@ -1,8 +1,8 @@
 {
-  "created_at": "2025-12-14T14:51:32.302028+00:00",
-  "elapsed": 0.060385,
+  "created_at": "2025-12-25T20:41:02.169269+00:00",
+  "elapsed": 0.071162,
   "encoding": "UTF-8",
-  "expires": "2025-12-15T14:51:32.301986+00:00",
+  "expires": "2025-12-26T20:41:02.169244+00:00",
   "headers": {
     "Accept-Ranges": "bytes",
     "Access-Control-Allow-Origin": "*",
@@ -10,14 +10,14 @@
     "Cache-Control": "public, max-age=3000",
     "Content-Disposition": "attachment; filename=\"log_list.json\"",
     "Content-Encoding": "br",
-    "Content-Length": "9929",
+    "Content-Length": "9935",
     "Content-Security-Policy": "require-trusted-types-for 'script'; report-uri https://csp.withgoogle.com/csp/cert-log-ninjas",
     "Content-Type": "application/json; charset=UTF-8",
     "Cross-Origin-Opener-Policy": "same-origin; report-to=\"cert-log-ninjas\"",
     "Cross-Origin-Resource-Policy": "cross-origin",
-    "Date": "Sun, 14 Dec 2025 14:51:32 GMT",
-    "Expires": "Sun, 14 Dec 2025 15:41:32 GMT",
-    "Last-Modified": "Sun, 14 Dec 2025 14:49:06 GMT",
+    "Date": "Thu, 25 Dec 2025 20:41:02 GMT",
+    "Expires": "Thu, 25 Dec 2025 21:31:02 GMT",
+    "Last-Modified": "Thu, 25 Dec 2025 15:11:45 GMT",
     "Report-To": "{\"group\":\"cert-log-ninjas\",\"max_age\":2592000,\"endpoints\":[{\"url\":\"https://csp.withgoogle.com/csp/report-to/cert-log-ninjas\"}]}",
     "Server": "sffe",
     "Vary": "Accept-Encoding",
@@ -31,7 +31,7 @@
       "Accept": "*/*",
       "Accept-Encoding": "gzip, deflate, br, zstd",
       "Connection": "keep-alive",
-      "If-Modified-Since": "Sun, 07 Dec 2025 15:12:53 GMT",
+      "If-Modified-Since": "Tue, 23 Dec 2025 15:02:17 GMT",
       "User-Agent": "python-requests/2.32.3"
     },
     "method": "GET",
@@ -40,8 +40,8 @@
   "status_code": 200,
   "url": "https://www.gstatic.com/ct/log_list/v3/log_list.json",
   "_decoded_content": {
-    "version": "78.3",
-    "log_list_timestamp": "2025-12-14T12:53:08Z",
+    "version": "80.6",
+    "log_list_timestamp": "2025-12-25T12:54:46Z",
     "operators": [
       {
         "name": "Google",
@@ -330,8 +330,8 @@
             "url": "https://wyvern.ct.digicert.com/2027h1/",
             "mmd": 86400,
             "state": {
-              "qualified": {
-                "timestamp": "2025-10-10T18:00:00Z"
+              "usable": {
+                "timestamp": "2025-12-20T18:00:00Z"
               }
             },
             "temporal_interval": {
@@ -346,8 +346,8 @@
             "url": "https://wyvern.ct.digicert.com/2027h2/",
             "mmd": 86400,
             "state": {
-              "qualified": {
-                "timestamp": "2025-10-10T18:00:00Z"
+              "usable": {
+                "timestamp": "2025-12-20T18:00:00Z"
               }
             },
             "temporal_interval": {
@@ -410,8 +410,8 @@
             "url": "https://sphinx.ct.digicert.com/2027h1/",
             "mmd": 86400,
             "state": {
-              "qualified": {
-                "timestamp": "2025-10-10T18:00:00Z"
+              "usable": {
+                "timestamp": "2025-12-20T18:00:00Z"
               }
             },
             "temporal_interval": {
@@ -426,8 +426,8 @@
             "url": "https://sphinx.ct.digicert.com/2027h2/",
             "mmd": 86400,
             "state": {
-              "qualified": {
-                "timestamp": "2025-10-10T18:00:00Z"
+              "usable": {
+                "timestamp": "2025-12-20T18:00:00Z"
               }
             },
             "temporal_interval": {
@@ -1217,8 +1217,8 @@
             "monitoring_url": "https://halloumi2025h2.mon.ct.ipng.ch/",
             "mmd": 60,
             "state": {
-              "qualified": {
-                "timestamp": "2025-10-07T18:30:00Z"
+              "usable": {
+                "timestamp": "2025-12-17T18:30:00Z"
               }
             },
             "temporal_interval": {
@@ -1234,8 +1234,8 @@
             "monitoring_url": "https://halloumi2026h1.mon.ct.ipng.ch/",
             "mmd": 60,
             "state": {
-              "qualified": {
-                "timestamp": "2025-10-07T18:30:00Z"
+              "usable": {
+                "timestamp": "2025-12-17T18:30:00Z"
               }
             },
             "temporal_interval": {
@@ -1268,8 +1268,8 @@
             "monitoring_url": "https://halloumi2027h1.mon.ct.ipng.ch/",
             "mmd": 60,
             "state": {
-              "qualified": {
-                "timestamp": "2025-10-07T18:30:00Z"
+              "usable": {
+                "timestamp": "2025-12-17T18:30:00Z"
               }
             },
             "temporal_interval": {
@@ -1285,8 +1285,8 @@
             "monitoring_url": "https://halloumi2027h2.mon.ct.ipng.ch/",
             "mmd": 60,
             "state": {
-              "qualified": {
-                "timestamp": "2025-10-07T18:30:00Z"
+              "usable": {
+                "timestamp": "2025-12-17T18:30:00Z"
               }
             },
             "temporal_interval": {

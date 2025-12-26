@@ -1,7 +1,7 @@
 [general]
 # Optionally set mitmproxy console eventlog verbosity level.  Valid levels are: "debug", "info", "warn", "error", or "alert".  It not set, mitmproxy defaults to "info".
 # You can change the logging level dynamically inside mitmproxy by adjusting the 'console_eventlog_verbosity' level inside the Options ("O") menu.
-console_logging_level = "error"
+console_logging_level = "debug"
 
 # OPTIONAL: In addition to warnings, you can choose to have additional feedback included on CertGuard's block screen.  Three levels are supported:
 #    0 - No additional feedback on blockpages beyond warnings (default)
@@ -51,7 +51,7 @@ token_mode = "post"
 filtering_mode = "warn"
 
 # Define list of allowed or denied countries, using iso-3166-alpha2 codes.
-# Countries will be compared against "C=" value extracted from certificate Subject fields.
+# Countries will be compared against "C=" value extracted from root CA certificate Subject fields.
 # https://www.rfc-editor.org/rfc/rfc5280.html#appendix-A.1
 # https://www.iso.org/obp/ui/#search/code/
 #country_list = ['AU','CA','GB','NZ','US']  # Five Eyes alliance countries

@@ -421,16 +421,16 @@ def request(flow: http.HTTPFlow) -> None:
     my_checks = [
         dane_check,
         root_country_check,     # Optional for mass scanning
-        #controlled_CA_checks,   # Optional for mass scanning
+        controlled_CA_checks,   # Optional for mass scanning
         expiry_check, 
         revocation_checks, 
         identity_check, 
         critical_ext_check,
-        #prior_approval_check,   # Optional for mass scanning
+        prior_approval_check,   # Optional for mass scanning
         sct_check, 
         #ct_quick_check,         # Can use this or the sct_check() and revocation_checks() for more thorough (albeit slower) validation.
         caa_check,
-        #test_check,
+        test_check,
         x509_version_check,
         dnssec_check,
     ] 

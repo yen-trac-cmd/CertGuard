@@ -6,7 +6,7 @@ __pycache__/
 # CertGuard private content
 scripts/
 log/*
-*.db
+Guard.db
 *.log
 logfile*
 *.testing

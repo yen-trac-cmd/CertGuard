@@ -22,11 +22,11 @@ def get_root_cert(
         root_cert:               Root cert if included in original cert chain from server, or already enumerated from AIA chasing.
         trusted_roots_by_ski:    List of trusted root certificates to match against.
     Returns:
-        Tuple[Optional[x509.Certificate], Optional[str], Optional[str], Optional[x509.Certificate]]: (root_cert, claimed_root, verification_error, self_signed)
+        Tuple[Optional[x509.Certificate], Optional[str], Optional[str], Optional[x509.Certificate], Optional[str]]: (root_cert, claimed_root, verification_error, self_signed, tag)
           1. root_cert:          Matched root cert from root_store, or None if no match.
           2. claimed_root:       CN (preferred) or full RFC 4514 subject string of the matched root cert, or None if no root identified.
           3. verification_error: Any error encountered during certificate chain verification
-          4.  self_signed:       Self-signed x509.Certificate object
+          4. self_signed:        Self-signed x509.Certificate object
           5. tag:                "Trusted", "DEPRECATED", "UNTRUSTED", "UNKNOWN", "ERROR", or "INVALID".
               - Trusted roots are those found in local root trust store.
               - Deprecated roots are those that, while still technically valid, are considered deprecated by common root programs.
@@ -115,7 +115,7 @@ def get_root_cert(
             verification_error = f"Cert chain verification failed between '{subject.subject.rfc4514_string()}' and '{issuer.subject.rfc4514_string()}': {e}"
             logging.critical(verification_error)
             logging.critical(f"Aborting further verification attempts.")
-            return None, None, verification_error, None, None
+            return None, None, verification_error, None, 'ERROR'
 
     # Verify last cert in chain against a trusted root anchors 
     last_cert = server_chain[-1]
@@ -182,7 +182,7 @@ def get_root_cert(
         return root_cert, None, verification_error, None, tag
     else:
         logging.error(f"Cert chain anchored to UNTRUSTED root CA!")
-        return None, last_cert.issuer.rfc4514_string(), verification_error, None, tag
+        return root_cert, last_cert.issuer.rfc4514_string(), verification_error, None, tag
 
 def verify_signature(subject: x509.Certificate, issuer: x509.Certificate) -> None:
     """

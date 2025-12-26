@@ -232,29 +232,30 @@ def request(flow: http.HTTPFlow) -> None:
             # Check trusted root certificates
             elif cert_aki in roots_by_ski:
                 root = roots_by_ski[cert_aki]
-                logging.debug('Identified root via dictionary lookup against AKI.')
+                logging.debug('Identified trusted root via dictionary lookup against AKI.')
                 break
             elif top_of_chain.issuer in roots_by_subject:
                 root = roots_by_subject[top_of_chain.issuer]
-                logging.info('Identified root via dictionary lookup against Issuer subject.')
+                logging.info('Identified trusted root via dictionary lookup against Issuer subject.')
                 break
             
+            # Check cached certificates
             elif cert_aki in cache_by_ski:
                 cached_cert = cache_by_ski[cert_aki]
                 if cached_cert.subject == cached_cert.issuer:
-                    logging.info(f'Identified untrusted root as: {chain_issuer.subject.rfc4514_string()}')
-                    root = chain_issuer
+                    logging.info(f'Identified cacheduntrusted root as: {cached_cert.subject.rfc4514_string()}')
+                    root = cached_cert
                     break
                 else:
                     top_of_chain = cached_cert
                     fetched_certs.append(cached_cert)
-                    logging.debug(f'Identified cached trusted intermediate CA ({cached_cert.subject.rfc4514_string()}) via dictionary lookup against AKI.')
+                    logging.debug(f'Identified cached intermediate CA ({cached_cert.subject.rfc4514_string()}) via dictionary lookup against AKI.')
                     continue
             elif top_of_chain.issuer in cache_by_subject:
                 cached_cert = cache_by_subject[top_of_chain.issuer]
                 if cached_cert.subject == cached_cert.issuer:
-                    logging.info(f'Identified untrusted root as: {chain_issuer.subject.rfc4514_string()}')
-                    root = chain_issuer
+                    logging.info(f'Identified cacheduntrusted root as: {cached_cert.subject.rfc4514_string()}')
+                    root = cached_cert
                     break
                 else:
                     top_of_chain = cached_cert

@@ -592,7 +592,7 @@ def caa_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Findin
     if return_violations:
         return Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.WARN, f'{"<br>".join(return_violations)}')
     else:
-        return Finding(DisplayLevel.POSITIVE, func_name(), ErrorLevel.NONE, f'✅ CAA records successfuly validated.')
+        return Finding(DisplayLevel.POSITIVE, func_name(), ErrorLevel.NONE, f'✅ CAA records successfully validated.')
 
 def test_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Finding:
     # Modified example rule from mitmproxy documentation
@@ -619,7 +619,7 @@ def dane_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Findi
         return Finding(None, None, ErrorLevel.NONE, None)
     else: # DANE in use
         if dane_validator.dane_validated:
-            return Finding(DisplayLevel.POSITIVE, func_name(), ErrorLevel.NONE, f'✅ DANE TLSA Record successfuly validated.')
+            return Finding(DisplayLevel.POSITIVE, func_name(), ErrorLevel.NONE, f'✅ DANE TLSA Record successfully validated.')
         elif dane_validator.dane_failure == True and config.enforce_dane:
             logging.error("Blocking request per 'enforce_dane' configuration.")
             return Finding(DisplayLevel.CRITICAL, func_name(), ErrorLevel.FATAL, f'{dane_validator.violation}')

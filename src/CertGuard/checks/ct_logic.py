@@ -441,7 +441,7 @@ def verify_inclusion(sct_data: bytes, ct_log_url: str, sct_timestamp: int, log_m
     # Fetch latest Signed Tree Head from CT log server
     try:
         logging.debug(f'Attempting to fetch latest STH from: {sth_url}')
-        sth_resp = requests.get(sth_url, timeout=REQUEST_TIMEOUT)
+        sth_resp = requests.get(sth_url, timeout=REQUEST_TIMEOUT, retry=3)
         sth_resp.raise_for_status()
     except requests.exceptions.Timeout:
         logging.error("Timeout fetching CT STH.")
@@ -470,7 +470,7 @@ def verify_inclusion(sct_data: bytes, ct_log_url: str, sct_timestamp: int, log_m
     proof_url = proof_url_template.format(leaf_hash_enc, tree_size)
     try:
         logging.debug(f'Attempting to fetch inclusion proof from: {proof_url}')
-        proof_resp = requests.get(proof_url, timeout=REQUEST_TIMEOUT)
+        proof_resp = requests.get(proof_url, timeout=REQUEST_TIMEOUT, retry=3)
         if proof_resp.status_code == 404:
             if sct_timestamp + log_mmd >= int(time.time()):
                 logging.info("Note: Leaf might not yet be included in the current STH (e.g. within MMD).")

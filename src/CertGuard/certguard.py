@@ -196,91 +196,113 @@ def request(flow: http.HTTPFlow) -> None:
         highest_error_level = ErrorLevel.ERROR.value
         findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.ERROR, errors))
     
-    # If chain incomplete, fetch missing intermediate CA certs via AIA chasing
-
-    root_already_present = False
-    fetched_certs = []
-    top_of_chain = cert_chain[-1]
+    # Iterate through the server-provided chain to find the earliest trust anchor.
+    # This allows us to ignore trailing cross-signed legacy certificates.
     root = None
     root_hash = None
     root_subject = None
     root_expiry = None
+    
+    root_already_present = False
+    fetched_certs = []
+    trust_found = False
 
-    if top_of_chain.subject == top_of_chain.issuer:
-        root_already_present = True
-        root = top_of_chain
-        highest_error_level = ErrorLevel.ERROR.value
-        findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.ERROR, f'⚠️ Root certificate included in server-supplied cert chain.'))
-    else:
-        while True:
-            cert_aki = get_akid(top_of_chain)
-            
-            # Check trusted intermediate certificates
-            if cert_aki in ints_by_ski:
-                intCA = ints_by_ski[cert_aki]
-                fetched_certs.append(intCA)
-                top_of_chain = intCA
-                logging.debug(f'Identified stored trusted intermediate CA ({intCA.subject.rfc4514_string()}) via dictionary lookup against AKI.')
-                continue
-            elif top_of_chain.issuer in ints_by_subject:
-                intCA = ints_by_subject[top_of_chain.issuer]
-                fetched_certs.append(intCA)
-                top_of_chain = intCA
-                logging.debug(f'Identified stored intermediate CA ({intCA.subject.rfc4514_string()}) via dictionary lookup against Issuer subject.')
-                continue
-            
-            # Check trusted root certificates
-            elif cert_aki in roots_by_ski:
-                root = roots_by_ski[cert_aki]
-                logging.debug('Identified trusted root via dictionary lookup against AKI.')
-                break
-            elif top_of_chain.issuer in roots_by_subject:
-                root = roots_by_subject[top_of_chain.issuer]
-                logging.info('Identified trusted root via dictionary lookup against Issuer subject.')
-                break
-            
-            # Check cached certificates
-            elif cert_aki in cache_by_ski:
-                cached_cert = cache_by_ski[cert_aki]
-                if cached_cert.subject == cached_cert.issuer:
-                    logging.info(f'Identified cacheduntrusted root as: {cached_cert.subject.rfc4514_string()}')
-                    root = cached_cert
+    for i, cert in enumerate(cert_chain):
+        cert_aki = get_akid(cert)
+        
+        # Check if cert is issued by a trusted root.
+        if cert_aki in roots_by_ski:
+            root = roots_by_ski[cert_aki]
+            trust_found = True
+        elif cert.issuer in roots_by_subject:
+            root = roots_by_subject[cert.issuer]
+            trust_found = True
+
+        if trust_found:
+            # Trim the chain to remove any unnecessary legacy certs provided after this one.
+            cert_chain = cert_chain[:i+1]
+            logging.info(f'Shortest path found! Trusted root identified via cert index {i}.')
+            break
+
+    # Perform AIA chasing if we couldn't find a matching root in the existing chain, or chain is incomplete.
+    if not trust_found:
+        top_of_chain = cert_chain[-1]
+
+        if top_of_chain.subject == top_of_chain.issuer:
+            root_already_present = True
+            root = top_of_chain
+            highest_error_level = ErrorLevel.ERROR.value
+            findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.ERROR, f'⚠️ Root certificate included in server-supplied cert chain.'))
+        else:
+            while True:
+                cert_aki = get_akid(top_of_chain)
+                
+                # Check trusted intermediate certificates
+                if cert_aki in ints_by_ski:
+                    intCA = ints_by_ski[cert_aki]
+                    fetched_certs.append(intCA)
+                    top_of_chain = intCA
+                    logging.debug(f'Identified stored trusted intermediate CA ({intCA.subject.rfc4514_string()}) via dictionary lookup against AKI.')
+                    continue
+                elif top_of_chain.issuer in ints_by_subject:
+                    intCA = ints_by_subject[top_of_chain.issuer]
+                    fetched_certs.append(intCA)
+                    top_of_chain = intCA
+                    logging.debug(f'Identified stored intermediate CA ({intCA.subject.rfc4514_string()}) via dictionary lookup against Issuer subject.')
+                    continue
+                
+                # Check trusted root certificates
+                elif cert_aki in roots_by_ski:
+                    root = roots_by_ski[cert_aki]
+                    logging.debug('Identified trusted root via dictionary lookup against AKI.')
+                    break
+                elif top_of_chain.issuer in roots_by_subject:
+                    root = roots_by_subject[top_of_chain.issuer]
+                    logging.info('Identified trusted root via dictionary lookup against Issuer subject.')
+                    break
+                
+                # Check cached certificates
+                elif cert_aki in cache_by_ski:
+                    cached_cert = cache_by_ski[cert_aki]
+                    if cached_cert.subject == cached_cert.issuer:
+                        logging.info(f'Identified cacheduntrusted root as: {cached_cert.subject.rfc4514_string()}')
+                        root = cached_cert
+                        break
+                    else:
+                        top_of_chain = cached_cert
+                        fetched_certs.append(cached_cert)
+                        logging.debug(f'Identified cached intermediate CA ({cached_cert.subject.rfc4514_string()}) via dictionary lookup against AKI.')
+                        continue
+                elif top_of_chain.issuer in cache_by_subject:
+                    cached_cert = cache_by_subject[top_of_chain.issuer]
+                    if cached_cert.subject == cached_cert.issuer:
+                        logging.info(f'Identified cacheduntrusted root as: {cached_cert.subject.rfc4514_string()}')
+                        root = cached_cert
+                        break
+                    else:
+                        top_of_chain = cached_cert
+                        fetched_certs.append(cached_cert)
+                        logging.debug(f'Identified cached intermediate CA ({cached_cert.subject.rfc4514_string()}) via dictionary lookup against Issuer subject.')
+                        continue
+
+                # Attempt to fetch next cert in chain by chasing AIA
+                chain_issuer = fetch_issuer_certificate(top_of_chain, fetched_certs)
+                if not chain_issuer:
                     break
                 else:
-                    top_of_chain = cached_cert
-                    fetched_certs.append(cached_cert)
-                    logging.debug(f'Identified cached intermediate CA ({cached_cert.subject.rfc4514_string()}) via dictionary lookup against AKI.')
-                    continue
-            elif top_of_chain.issuer in cache_by_subject:
-                cached_cert = cache_by_subject[top_of_chain.issuer]
-                if cached_cert.subject == cached_cert.issuer:
-                    logging.info(f'Identified cacheduntrusted root as: {cached_cert.subject.rfc4514_string()}')
-                    root = cached_cert
+                    # Cache fetched certificates in memory, and also to filesystem for future sessions.
+                    chain_issuer_ski = get_skid(chain_issuer)
+                    cache_by_ski[chain_issuer_ski]=chain_issuer
+                    cache_cert(chain_issuer, chain_issuer_ski.hex(), config.cached_dir)
+                
+                if chain_issuer.subject == chain_issuer.issuer:
+                    logging.info(f'Identified untrusted root as: {chain_issuer.subject.rfc4514_string()}')
+                    root = chain_issuer
                     break
-                else:
-                    top_of_chain = cached_cert
-                    fetched_certs.append(cached_cert)
-                    logging.debug(f'Identified cached intermediate CA ({cached_cert.subject.rfc4514_string()}) via dictionary lookup against Issuer subject.')
-                    continue
-
-            # Attempt to fetch next cert in chain by chasing AIA
-            chain_issuer = fetch_issuer_certificate(top_of_chain, fetched_certs)
-            if not chain_issuer:
-                break
-            else:
-                # Cache fetched certificates in memory, and also to filesystem for future sessions.
-                chain_issuer_ski = get_skid(chain_issuer)
-                cache_by_ski[chain_issuer_ski]=chain_issuer
-                cache_cert(chain_issuer, chain_issuer_ski.hex(), config.cached_dir)
-            
-            if chain_issuer.subject == chain_issuer.issuer:
-                logging.info(f'Identified untrusted root as: {chain_issuer.subject.rfc4514_string()}')
-                root = chain_issuer
-                break
-            else:   # Fetched cert is an intermediate.
-                logging.warning(f'Fetched cert missing from chain: {chain_issuer.subject.rfc4514_string()}')
-                fetched_certs.append(chain_issuer)
-                top_of_chain = chain_issuer
+                else:   # Fetched cert is an intermediate.
+                    logging.warning(f'Fetched cert missing from chain: {chain_issuer.subject.rfc4514_string()}')
+                    fetched_certs.append(chain_issuer)
+                    top_of_chain = chain_issuer
 
     if fetched_certs:
         findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.ERROR, f'⚠️ Server failed to send complete certificate chain.'))

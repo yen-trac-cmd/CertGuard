@@ -44,7 +44,7 @@ def get_root_cert(
         #logging.debug(f'Cert #{i}: hash: {cert.fingerprint(hashes.SHA256()).hex()}')
         logging.debug('------------------')
 
-    logging.info(f'Length of presented chain: {len(server_chain)}')
+    logging.info(f'Length of processed chain: {len(server_chain)}')
 
     for i, cert in enumerate(server_chain):
         # Label selection logic
@@ -303,12 +303,17 @@ def normalize_chain(chain: list[x509.Certificate]) -> Tuple[Sequence[x509.Certif
     """
     logging.warning("-----------------------------------Entering normalize_chain()-------------------------------------")
     findings = []
-    logging.debug(f'Found {len(chain)} certs in server-supplied chain prior to de-duplication & reordering:')
+    logging.debug(f'Found {len(chain)} certs in server-supplied chain prior to de-duplication, reordering, and shortest-path optimization:')
     for i, cert in enumerate(chain):
         logging.debug(f' - Cert {i}: {cert.subject.rfc4514_string()}')
-        #from cryptography.hazmat.primitives import serialization
-        #pem_bytes = cert.public_bytes(encoding=serialization.Encoding.PEM)
-        #logging.debug(pem_bytes.decode('utf-8'))
+        logging.debug(f'     Hash: {cert.fingerprint(hashes.SHA256()).hex()} (SHA256)')
+
+        # Uncomment to print PEM-encoded certificate for debugging purposes
+        '''
+        from cryptography.hazmat.primitives import serialization
+        pem_bytes = cert.public_bytes(encoding=serialization.Encoding.PEM)
+        logging.debug(pem_bytes.decode('utf-8'))
+        '''
 
     # Remove duplicates
     chain, dups = deduplicate_chain(chain)

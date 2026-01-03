@@ -480,7 +480,8 @@ def _check_crl(cert: x509.Certificate, crl_urls: list, issuer_cert: x509.Certifi
     # Try each CRL URL
     for url in crl_urls:
         try:
-            response = requests.get(url, timeout=timeout)
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'}
+            response = requests.get(url, timeout=timeout, headers=headers)
             if response.status_code != 200:
                 continue
             
@@ -489,7 +490,9 @@ def _check_crl(cert: x509.Certificate, crl_urls: list, issuer_cert: x509.Certifi
             try:
                 crl = x509.load_der_x509_crl(response.content)
                 logging.debug(f'Successfully parsed DER-encoded CRL.')
-            except Exception:
+            except Exception as e:
+                logging.error(f'Error parsing DER-encoded CRL: {e}')
+                logging.error(f'Attempting to parse CRL as PEM-encoded data...')
                 try:
                     crl = x509.load_pem_x509_crl(response.content)
                     logging.debug(f'Successfully parsed PEM-encoded CRL.')
@@ -497,9 +500,8 @@ def _check_crl(cert: x509.Certificate, crl_urls: list, issuer_cert: x509.Certifi
                     error_msg = f'Unable to parse downloaded CRL {crl}'
                     error_messages.append(error_msg)
                     logging.debug(error_msg)
-                    continue
             
-            # Check if parsing succeeded & skip if not.
+            # Try next CDP if parsing failed.
             if crl is None: continue
             
             # Check signature on CRL

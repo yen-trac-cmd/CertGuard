@@ -48,6 +48,7 @@ class Finding:
     check: str
     error_level: ErrorLevel
     message: str
+    finding_id: int
 
 class Config:
     def __init__(self) -> None:

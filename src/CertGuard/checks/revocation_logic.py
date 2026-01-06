@@ -133,7 +133,7 @@ def check_cert_revocation(cert: x509.Certificate, issuer_cert: x509.Certificate 
         return (False, "", None, None)
     else:
         logging.info('Unable to check revocation via OCSP; falling back to CRL (if CDP present).')
-        if return_msg: errors.append(return_msg)
+        if return_msg: errors.extend(return_msg)
     
     # Try CRL as fallback
     try:

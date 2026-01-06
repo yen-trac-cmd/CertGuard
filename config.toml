@@ -1,7 +1,7 @@
 [general]
 # Optionally set mitmproxy console eventlog verbosity level.  Valid levels are: "debug", "info", "warn", "error", or "alert".  It not set, mitmproxy defaults to "info".
 # You can change the logging level dynamically inside mitmproxy by adjusting the 'console_eventlog_verbosity' level inside the Options ("O") menu.
-console_logging_level = "debug"
+console_logging_level = "error"
 
 # OPTIONAL: In addition to warnings, you can choose to have additional feedback included on CertGuard's block screen.  Three levels are supported:
 #    0 - No additional feedback on blockpages beyond warnings (default)

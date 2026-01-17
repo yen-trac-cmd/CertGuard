@@ -89,16 +89,13 @@ def check_caa_per_domain(config, domain: str, ca_identifiers: list[str]) -> tupl
                     if not isinstance(rdata, CAA.CAA):
                         logging.debug(f' Skipping checks against malformed or non-CAA record: {rrset}')
                         continue
-                    elif rdata.flags not in (0, 128):    # All other flags are reserved per RFC8659.
+                    if rdata.flags not in (0, 128):    # All other flags are reserved per RFC8659.
                         logging.error(f'Invalid CAA flag value ({rdata.flags}) encountered; full CAA record: {rdata.to_text()}')
                         warnings.append(f'&emsp;&emsp;▶ Invalid CAA flag value ("<code>{rdata.flags}</code>") encountered.')
-
-                        continue
-                    elif rdata.tag.decode('utf-8').lower() not in ("issue","issuewild","issuemail","issuevmc","iodef","contactemail","contactphone"):
+                    if rdata.tag.decode('utf-8').lower() not in ("issue","issuewild","issuemail","issuevmc","iodef","contactemail","contactphone"):
                         logging.error(f'Invalid CAA tag value ({rdata.tag.decode('utf-8')}) encountered; full CAA record: {rdata.to_text()}')
                         warnings.append(f'&emsp;&emsp;▶ Invalid CAA tag value ("<code>{rdata.tag.decode('utf-8')}</code>") encountered.')
-                        continue
-                    else:
+                    if not warnings:
                         if rdata.tag.decode('utf-8') == 'issue':
                             issue_properties.append(rdata.value.lower().decode('utf-8'))
                         if rdata.tag.decode('utf-8') == 'issuewild':
@@ -124,7 +121,7 @@ def check_caa_per_domain(config, domain: str, ca_identifiers: list[str]) -> tupl
                     
                 # Fallthrough -- Either we're testing a non-wildcard cert entry OR we're testing a wildcard cert but there's no 'issuewild' property.
                 if not issue_properties:
-                    logging.warning(f" No 'issue' CAA records found at {check_domain}.")
+                    logging.warning(f" No valid 'issue' CAA records found at {check_domain}.")
                     continue
                 if len(issue_properties) == 1 and issue_properties[0] == ";":  # CAA records are additive, so need to ensure blank record is by itself.
                     return False, f'Empty issuer-domain-name value (";") encountered at {check_domain}; certificate issuance explicitly prohibited for {domain}!', records_found
@@ -158,6 +155,9 @@ def check_caa_per_domain(config, domain: str, ca_identifiers: list[str]) -> tupl
         warnings.append(f"&emsp;&emsp;▶ CAA records do not authorize CA for site certificate.")
         return False, "<br>".join(warnings), records_found
 
+    if warnings:
+        return False, "<br>".join(warnings), True
+    
     # No CAA records found at all
     logging.warning(f'No published CAA record found; return true per RFC8659')
     return True, None, records_found # No CAA record founds; return true per RFC8659

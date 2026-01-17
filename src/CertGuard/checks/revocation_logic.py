@@ -133,7 +133,7 @@ def check_cert_revocation(cert: x509.Certificate, issuer_cert: x509.Certificate 
         return (False, "", None, None)
     else:
         logging.info('Unable to check revocation via OCSP; falling back to CRL (if CDP present).')
-        if return_msg: errors.extend(return_msg)
+        if return_msg: errors.extend([return_msg])
     
     # Try CRL as fallback
     try:
@@ -154,7 +154,7 @@ def check_cert_revocation(cert: x509.Certificate, issuer_cert: x509.Certificate 
     if not ocsp_urls and not crl_urls:
         return (False, "No revocation information (CRL/OCSP) in certificate", None, None)
     
-    error_msg = "<br>".join(errors) if errors else "Unable to verify revocation status"
+    error_msg = "<br>&emsp;&emsp;▶ ".join(errors) if errors else "Unable to verify revocation status"
     return (False, error_msg, None, None)
 
 def _get_crl_revocation_reason(revoked_cert) -> Optional[str]:
@@ -289,7 +289,7 @@ def _get_ocsp(cert: x509.Certificate, issuer_cert: x509.Certificate, cert_chain:
 def _check_ocsp(cert: x509.Certificate, issuer_cert: x509.Certificate, cert_chain: list[x509.Certificate], ocsp_response_bytes ) -> Tuple[Optional[bool], Optional[str]]:
     """
     Check OCSP response data
-    Returns (True, reason) if revoked, (False, None) if good, (None, None) if unknown/error.
+    Returns (True, reason) if revoked, (False, None) if good, (None, error_msg) if unknown/error.
     """
     logging.warning(f"-----------------------------------Entering _check_ocsp()-----------------------------------------")
     

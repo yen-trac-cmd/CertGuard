@@ -116,14 +116,18 @@ class OCSPStaplingConfig(TlsConfig):
                 extensions = ocsp_resp.single_extensions
             except AttributeError:
                 logging.debug("[OCSP] No extensions present in OCSP response")
-
+            except Exception as e:
+                logging.debug(f"[OCSP] Exception when checking OCSP extensions: {e}")
             if extensions:
-                #logging.info(f"[OCSP] Found {len(extensions)} extension(s)... checking for stapled SCT.")
+                logging.info(f"[OCSP] Found {len(extensions)} extension(s): {ocsp_resp.single_extensions}")
+                logging.info(f"[OCSP] Checking for stapled SCT...")
+                sct_ext_found = False
                 for ext in extensions:
                     if ext.oid.dotted_string == "1.3.6.1.4.1.11129.2.4.5":           # OID for SCT List
                         logging.info(f"[OCSP] *** Signed Certificate Timestamp (SCT) Extension Found ***")
+                        sct_ext_found = True
+                        self.ocsp_by_connection[conn_id]["ocsp_contains_sct"] = True
                         try:
-                            self.ocsp_by_connection[conn_id]["ocsp_contains_sct"] = True
                             sct_list = ext.value
                             logging.info(f"[OCSP] SCT List contains {len(sct_list)} SCT(s).")
 
@@ -139,6 +143,9 @@ class OCSPStaplingConfig(TlsConfig):
                                 logging.info(f"[OCSP]     Entry Type: {sct.entry_type.name}")
                         except Exception as e:
                             logging.warning(f"[OCSP] Could not parse SCT extension: {e}")
+                if not sct_ext_found:
+                    logging.info(f"No stapled SCT(s) found.")
+                    
         
     def tls_established_server(self, data: tls.TlsData) -> None:
         """Called after TLS handshake is complete"""

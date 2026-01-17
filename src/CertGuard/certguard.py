@@ -159,7 +159,7 @@ def request(flow: http.HTTPFlow) -> None:
                 if conn_id in ocsp_addon.ocsp_sct_list:
                     stapled_sct = ocsp_addon.ocsp_sct_list[conn_id]
                     logging.debug(f"SCT extension found in stapled OCSP response: {stapled_sct}")
-                    del ocsp_addon.stapled_sct[conn_id]
+                    del ocsp_addon.ocsp_sct_list[conn_id]
                     
                     # Raise immediate level-6 blockpage during hunt for *any* website adding SCTs as OCSP extension inside stapled responses.
                     finding = f'🎉 Found SCT in stapled OCSP response for <b>{flow.request.pretty_url}</b>!!'

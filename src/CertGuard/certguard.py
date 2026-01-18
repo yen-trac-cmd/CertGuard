@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import sqlite3
 import uuid
 from requests import get
@@ -138,7 +139,7 @@ def request(flow: http.HTTPFlow) -> None:
 
     mitm_cert_chain = flow.server_conn.certificate_list
     if not mitm_cert_chain:
-        logging.info(f'Unencrypted connection; skipping further checks.')
+        logging.info(f'Unencrypted connection (or TLS handshake failed); skipping further checks.')
         return
 
     if host in approved_hosts:
@@ -514,6 +515,86 @@ def response(flow: http.HTTPFlow) -> None:
         json_fragment = json_string[1:-1]
 
         log.info(json_fragment)
+
+
+def error(flow: http.HTTPFlow) -> None:
+    logging.warning(f"-----------------------------------Entering error()-----------------------------------------------")
+    highest_error_level = flow.metadata.get("Highest_Errorlevel", 0)
+    findings = flow.metadata.get("CertGuard_findings")
+
+    if flow.server_conn.tls_version is None:
+        response_code = 635
+        highest_error_level = -1
+        findings = [{"finding_id": 39800, "check": "mitmproxy_tls_connection", "error_level": -1, "message": "Unable to establish TLS connection with server"}]
+    else:
+        response_code = 630
+
+    log_entry = {
+        "Response Code": response_code, 
+        "FQDN": flow.request.pretty_host, 
+        "IP": flow.server_conn.peername[0],
+        "Port": flow.server_conn.peername[1],
+        "TLS_version": flow.server_conn.tls_version,
+        "ErrorLevel": highest_error_level, 
+        "Findings": findings
+    }
+    
+    json_string = json.dumps(log_entry)
+    # Strip outter JSON brackets before passing to logger
+    json_fragment = json_string[1:-1]
+
+    log.info(json_fragment)
+
+
+def http_connect_error(flow: http.HTTPFlow) -> None:
+    logging.warning(f"-----------------------------------Entering http_connect_error()----------------------------------")
+    
+    #remote_host = flow.server_conn.address[0] if flow.server_conn.address else "Unknown"
+    logging.error(f"Failed to connect to: {flow.server_conn.address[0]}")
+
+    
+    if flow.error:
+        error_text = flow.error.msg
+        # Regex to find standard IPv4 addresses in the error string
+        # It matches sequences like '72.21.210.29'
+        ip_pattern = r'\b(?:\d{1,3}\.){3}\d{1,3}\b'
+        failed_ips = re.findall(ip_pattern, error_text)
+        
+        if failed_ips:
+            logging.error(f"Failed to connect to host using IPs: {', '.join(failed_ips)}")
+            logged_ip = failed_ips[0]
+        else:
+            # Fallback to the intended address if parsing fails
+            planned_address = flow.server_conn.address if flow.server_conn else "Unknown"
+            logging.error(f"Connection failed to: {planned_address}. Error: {error_text}")
+            logged_ip = "0.0.0.2"
+    
+    elif flow.server_conn and flow.server_conn.address:
+        #logging.error(f"Failed to connect to: {flow.server_conn.address}")
+        logged_ip = "0.0.0.0"
+    else:
+        # Catch-all
+        logged_ip = "0.0.0.1"
+
+    highest_error_level = -2
+    findings = [{"finding_id": 39900, "check": "mitmproxy_tls_connection", "error_level": -1, "message": "Unable to establish server connection"}]
+    
+    log_entry = {
+        "Response Code": 645, 
+        "FQDN": flow.request.pretty_host, 
+        "IP": logged_ip,
+        "Port": flow.server_conn.address[1],
+        "TLS_version": flow.server_conn.tls_version,
+        "ErrorLevel": highest_error_level, 
+        "Findings": findings
+    }
+    
+    json_string = json.dumps(log_entry)
+    # Strip outter JSON brackets before passing to logger
+    json_fragment = json_string[1:-1]
+
+    log.info(json_fragment)
+
 
 def done() -> None:
     log_file = Logger.log_file

@@ -1,8 +1,8 @@
 {
-  "created_at": "2026-01-17T17:00:18.704321+00:00",
-  "elapsed": 0.074898,
+  "created_at": "2026-01-18T17:10:10.531275+00:00",
+  "elapsed": 0.060927,
   "encoding": "UTF-8",
-  "expires": "2026-01-18T17:00:18.704288+00:00",
+  "expires": "2026-01-19T17:10:10.531221+00:00",
   "headers": {
     "Accept-Ranges": "bytes",
     "Access-Control-Allow-Origin": "*",
@@ -10,14 +10,14 @@
     "Cache-Control": "public, max-age=3000",
     "Content-Disposition": "attachment; filename=\"log_list.json\"",
     "Content-Encoding": "br",
-    "Content-Length": "9926",
+    "Content-Length": "9924",
     "Content-Security-Policy": "require-trusted-types-for 'script'; report-uri https://csp.withgoogle.com/csp/cert-log-ninjas",
     "Content-Type": "application/json; charset=UTF-8",
     "Cross-Origin-Opener-Policy": "same-origin; report-to=\"cert-log-ninjas\"",
     "Cross-Origin-Resource-Policy": "cross-origin",
-    "Date": "Sat, 17 Jan 2026 17:00:18 GMT",
-    "Expires": "Sat, 17 Jan 2026 17:50:18 GMT",
-    "Last-Modified": "Sat, 17 Jan 2026 15:22:36 GMT",
+    "Date": "Sun, 18 Jan 2026 17:10:10 GMT",
+    "Expires": "Sun, 18 Jan 2026 18:00:10 GMT",
+    "Last-Modified": "Sun, 18 Jan 2026 15:28:56 GMT",
     "Report-To": "{\"group\":\"cert-log-ninjas\",\"max_age\":2592000,\"endpoints\":[{\"url\":\"https://csp.withgoogle.com/csp/report-to/cert-log-ninjas\"}]}",
     "Server": "sffe",
     "Vary": "Accept-Encoding",
@@ -31,7 +31,7 @@
       "Accept": "*/*",
       "Accept-Encoding": "gzip, deflate, br, zstd",
       "Connection": "keep-alive",
-      "If-Modified-Since": "Mon, 05 Jan 2026 15:02:37 GMT",
+      "If-Modified-Since": "Sat, 17 Jan 2026 15:22:36 GMT",
       "User-Agent": "python-requests/2.32.3"
     },
     "method": "GET",
@@ -40,8 +40,8 @@
   "status_code": 200,
   "url": "https://www.gstatic.com/ct/log_list/v3/log_list.json",
   "_decoded_content": {
-    "version": "81.11",
-    "log_list_timestamp": "2026-01-17T12:53:28Z",
+    "version": "81.12",
+    "log_list_timestamp": "2026-01-18T13:14:14Z",
     "operators": [
       {
         "name": "Google",

@@ -516,7 +516,6 @@ def response(flow: http.HTTPFlow) -> None:
 
         log.info(json_fragment)
 
-
 def error(flow: http.HTTPFlow) -> None:
     logging.warning(f"-----------------------------------Entering error()-----------------------------------------------")
     highest_error_level = flow.metadata.get("Highest_Errorlevel", 0)
@@ -545,13 +544,11 @@ def error(flow: http.HTTPFlow) -> None:
 
     log.info(json_fragment)
 
-
 def http_connect_error(flow: http.HTTPFlow) -> None:
     logging.warning(f"-----------------------------------Entering http_connect_error()----------------------------------")
     
     #remote_host = flow.server_conn.address[0] if flow.server_conn.address else "Unknown"
     logging.error(f"Failed to connect to: {flow.server_conn.address[0]}")
-
     
     if flow.error:
         error_text = flow.error.msg
@@ -594,7 +591,6 @@ def http_connect_error(flow: http.HTTPFlow) -> None:
     json_fragment = json_string[1:-1]
 
     log.info(json_fragment)
-
 
 def done() -> None:
     log_file = Logger.log_file

@@ -26,7 +26,7 @@ Instead, CertGuard serves as a research tool and demonstration framework for imp
 ## ⚠️ Disclaimer
 CertGuard intercepts/decrypts HTTPS traffic via mitmproxy and performs deep inspection of certificates and 
 network metadata. Use it **only in environments for which you have authorization to decrypt network traffic**, 
-and only if you understand the security implications for running proof-of-concept code!
+and only if you understand the security implications of running proof-of-concept code!
 
 ---
 
@@ -78,6 +78,6 @@ CertGuard will analyze certificates and display validation results in real-time.
 You can test that CertGuard checks are working by browsing to https://www.example.com/path, which will generate a Level-1 Warning page by the test_check() function.
 
 ## 🛠 Project Status
-CertGuard is merely a proof-of-concept created as part of a research project.  It is **not** suitable for use in production environments and has **not** been code-reviewed for security vulnerabilities.  It's also a work-in-progress, so APIs, validation logic, and output formatting may evolve rapidly as features are refined.  **USE AT YOUR OWN RISK!**
+CertGuard is merely a proof-of-concept created as part of a research project.  It is **not** suitable for use in production environments and its code has **not** been reviewed for security vulnerabilities (of which it almost certainly has!).  It's also a work-in-progress, so console output formatting, validation logic, code structure, and logging and may evolve rapidly as features are refined.  **USE AT YOUR OWN RISK!**
 
 Feedback, issue reports, and suggestions are welcome.

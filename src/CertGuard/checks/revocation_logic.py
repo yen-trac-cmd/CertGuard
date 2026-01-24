@@ -139,9 +139,6 @@ def check_cert_revocation(cert: x509.Certificate, issuer_cert: x509.Certificate 
                 errors.extend(return_msg)
             else:
                 errors.append(return_msg)
-
-
-        if return_msg: errors.extend([return_msg])
     
     # Try CRL as fallback
     try:

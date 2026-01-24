@@ -1,3 +1,4 @@
+from ast import AsyncFunctionDef
 import base64
 import datetime
 import hashlib
@@ -173,13 +174,13 @@ def parse_ct_extensions(ext_bytes: bytes) -> dict:
 
     return parsed
 
-def extract_scts(cert: x509.Certificate, ct_log_map) -> list[dict]:
+def extract_scts(ct_log_map, cert: x509.Certificate = None, stapled_scts: x509.extensions.SignedCertificateTimestamps = None) -> list[dict]:
     """
     Extract and return Signed Certificate Timestamps (SCTs) from supplied x.509 Certificate along with CT log server metadata
 
     Args:
-        cert:       x509 TLS certificate from which to extract SCT
-
+        cert:         x509 TLS certificate from which to extract SCT
+        stapled_sct:  SCT list included in extensions of stapled OCSP response
     Returns:
         sct_data:   A list of dictionaries that represent SCT data extracted or derived from the provided certificate.
 
@@ -188,13 +189,17 @@ def extract_scts(cert: x509.Certificate, ct_log_map) -> list[dict]:
     (e.g. 'certificate_status') response during TLS session negotiation, but as of 2025 usage of these methods appears to be exceedingly rare.
     """
     logging.warning("-----------------------------------Entering extract_scts()----------------------------------------")
-    try:
-        ext = cert.extensions.get_extension_for_oid(ExtensionOID.PRECERT_SIGNED_CERTIFICATE_TIMESTAMPS)
-    except x509.ExtensionNotFound:
-        logging.info("No SCT extension found in certificate.")
-        return []
+    
+    if stapled_scts:
+        scts = stapled_scts
+    else:
+        try:
+            ext = cert.extensions.get_extension_for_oid(ExtensionOID.PRECERT_SIGNED_CERTIFICATE_TIMESTAMPS)
+        except x509.ExtensionNotFound:
+            logging.info("No SCT extension found in certificate.")
+            return []
 
-    scts = ext.value  # iterable of SCT objects
+        scts = ext.value  # iterable of SCT objects
 
     for count, sct in enumerate(scts):
         #logging.info(f"SCT log_id {count} (hex): {sct.log_id.hex()}")
@@ -229,7 +234,7 @@ def extract_scts(cert: x509.Certificate, ct_log_map) -> list[dict]:
         
     return sct_data
 
-def validate_sct_signature(cert: x509.Certificate, issuer_cert: x509.Certificate, sct: dict) -> tuple[bool, str, bytes | None]:
+def validate_sct_signature(cert: x509.Certificate, issuer_cert: x509.Certificate, sct: dict, entry_type: str = None) -> tuple[bool, str, bytes | None]:
     """
     Validate ECDSA digital signature on a Signed Certificate Timestamp (SCT)
     Code adapted from https://research.ivision.com/how-does-certificate-transparency-work.html.
@@ -256,10 +261,17 @@ def validate_sct_signature(cert: x509.Certificate, issuer_cert: x509.Certificate
     sct_data += b"\0"                                                               # Version: 0=v1
     sct_data += b"\0"                                                               # SignatureType: 0=certificate_timestamp
     sct_data += timestamp                                                           # uint64 timestamp
-    sct_data += b"\x00\x01"                                                         # LogEntryType: 0x0001=precert_entry, 0x0000=cert_entry
-    sct_data += issuer_public_key_hash                                              # PreCert.opaque: issuer_key_hash[32]
-    sct_data += bytes.fromhex(hex(len(cert.tbs_precertificate_bytes))[2:].zfill(6)) # PreCert.TBSCertificate.opaque: 3-byte-length 
-    sct_data += cert.tbs_precertificate_bytes                                       # PreCert.TBSCertificate (actual bytes)
+    if entry_type == 'X509':
+        cert_der = cert.public_bytes(serialization.Encoding.DER)
+        sct_data += b"\x00\x00"                                                     # LogEntryType: 0x0000 = X509_cert_entry
+        #sct_data += issuer_public_key_hash                                              # PreCert.opaque: issuer_key_hash[32]
+        sct_data += bytes.fromhex(hex(len(cert_der))[2:].zfill(6))                  # 3-byte-length of cert data
+        sct_data += cert_der                                                        # X509 Certificate (actual bytes)
+    else:
+        sct_data += b"\x00\x01"                                                     # LogEntryType: 0x0001=precert_entry
+        sct_data += issuer_public_key_hash                                              # PreCert.opaque: issuer_key_hash[32]
+        sct_data += bytes.fromhex(hex(len(cert.tbs_precertificate_bytes))[2:].zfill(6)) # PreCert.TBSCertificate.opaque: 3-byte-length 
+        sct_data += cert.tbs_precertificate_bytes                                       # PreCert.TBSCertificate (actual bytes)
     sct_data += ext_length                                                          # CtExtensions: 2-byte-length(extensions)
     sct_data += sct_extension                                                       # CtExtensions; only one type (0) currently defined for leaf_index.
     #logging.debug(f'Data structure to verify SCT signature against: {sct_data.hex()}')

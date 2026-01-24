@@ -119,7 +119,8 @@ class OCSPStaplingConfig(TlsConfig):
             except Exception as e:
                 logging.debug(f"[OCSP] Exception when checking OCSP extensions: {e}")
             if extensions:
-                logging.info(f"[OCSP] Found {len(extensions)} extension(s): {ocsp_resp.single_extensions}")
+                logging.info(f"[OCSP] Found {len(extensions)} extension(s)")
+                #logging.info(f"[OCSP] Extension data: {ocsp_resp.single_extensions}")
                 logging.info(f"[OCSP] Checking for stapled SCT...")
                 sct_ext_found = False
                 for ext in extensions:
@@ -133,14 +134,7 @@ class OCSPStaplingConfig(TlsConfig):
 
                             # Store sct_list for later parsing by ct_logic().
                             self.ocsp_sct_list[conn_id] = sct_list
-                            
-                            # Log SCT values
-                            for i, sct in enumerate(sct_list, 1):
-                                logging.info(f"[OCSP]   SCT #{i}:")
-                                logging.info(f"[OCSP]     Version: {sct.version.name}")
-                                logging.info(f"[OCSP]     Log ID: {sct.log_id.hex()}")
-                                logging.info(f"[OCSP]     Timestamp: {sct.timestamp}")
-                                logging.info(f"[OCSP]     Entry Type: {sct.entry_type.name}")
+
                         except Exception as e:
                             logging.warning(f"[OCSP] Could not parse SCT extension: {e}")
                 if not sct_ext_found:

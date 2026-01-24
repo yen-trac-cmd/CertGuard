@@ -238,7 +238,7 @@ def clean_error(html_string: str) -> str:
     from lxml.html import fromstring
     import re
 
-    cz_to_replace = r"🛈|ℹ️|✅|✘|❌|⛔|⚠️|🎉|▶|&nbsp;|&emsp;"
+    cz_to_replace = r"🛈|ℹ️|✅|✘|❌|⛔|⚠️|▶|&nbsp;|&emsp;"
     
     error_text = re.sub(cz_to_replace, '', html_string).strip()
     tree = fromstring(error_text)

@@ -438,6 +438,7 @@ def sct_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Findin
 
     cert = cert_chain[0]
     issuer_cert = cert_chain[1]
+    stapled_index = 0
 
     warnings = []
     violations = []
@@ -445,16 +446,24 @@ def sct_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Findin
     logging.debug(f'Issuer cert: {issuer_cert.subject.rfc4514_string()}')
     
     # Check for SCTs & extract data
-    scts = extract_scts(cert, ct_log_map)
+    scts = extract_scts(ct_log_map, cert)
+
+    if flow.metadata.get("stapled_ocsp_sct_list"):
+        stapled_response = flow.metadata.get("stapled_ocsp_sct_list")
+        stapled_index = len(scts) + 1
+        scts.extend(extract_scts(ct_log_map, None, stapled_response))
+
     if not scts:
-        # TODO: Update code to account for external SCTs (e.g. delivered via OCSP or during TLS negotation).  Although these
-        # alternative SCT delivery methods are exceedingly rare, this check should not result in FATAL errors until those methods are added.
+        # TODO: Although these are exceedingly rare, update code to account for external SCTs delivered during TLS negotation.
         logging.error(f"Cert for {flow.request.pretty_url} missing SCT(s)!")
         violation = '⚠️ Certificate missing <a href=https://certificate.transparency.dev/howctworks/ target="_blank">Signed Certificate Timestamps</a> (SCTs).'
         return Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.ERROR, violation, 21001)
     
     # Print out SCT details for debugging purposes
     for i, sct in enumerate(scts, 1):
+        if i == stapled_index:
+            logging.warning('Checking SCTs from extension of stapled OCSP response...')
+        
         logging.debug(f"SCT #{i}")
         for k, v in sct.items():
             logging.debug(f"  {k}: {v}")
@@ -464,7 +473,10 @@ def sct_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Findin
         
         # Validate SCT digital signatures (if enabled)
         if config.verify_signatures:
-            validated, error, leaf_struct = validate_sct_signature(cert, issuer_cert, sct)
+            if i >= stapled_index:
+                validated, error, leaf_struct = validate_sct_signature(cert, issuer_cert, sct, "X509")
+            else:
+                validated, error, leaf_struct = validate_sct_signature(cert, issuer_cert, sct)
             if error:
                 logging.error(f"Error during SCT validation attempt for SCT #{i}: {error}")
                 warnings.append(f'⚠️ Encountered error trying to validate SCT #{i}: {error}')

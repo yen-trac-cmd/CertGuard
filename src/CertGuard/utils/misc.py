@@ -59,6 +59,7 @@ def get_ocsp_oid_name(oid_dotted: str) -> str:
         '1.3.6.1.5.5.7.48.1.6': 'Archive Cutoff',
         '1.3.6.1.5.5.7.48.1.7': 'Service Locator',
         '1.3.6.1.4.1.311.21.4': 'CRL Next Publish',  # Microsoft proprietary https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-csra/69c1c13a-e270-49ad-9bc1-a94fe019c8c9
+        '1.3.6.1.4.1.11129.2.4.5': 'Signed Certificate Timestamp List',
         # CRL Entry Extensions that can appear in SingleResponse
         '2.5.29.21': 'CRL Reason',
         '2.5.29.23': 'Hold Instruction Code',

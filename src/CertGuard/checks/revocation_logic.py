@@ -1,5 +1,6 @@
 import logging
 import requests
+from asn1crypto import core
 from cryptography import x509, exceptions
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
@@ -379,11 +380,28 @@ def _check_ocsp(cert: x509.Certificate, issuer_cert: x509.Certificate, cert_chai
                     logging.debug(f" - Extension OID:       {ext.oid.dotted_string} ({oid_name})")
                     logging.debug(f" - Extension Critical:  {ext.critical}")
                     # Try to display the extension value
-                    if isinstance(ext.value, UnrecognizedExtension):
+                    if ext.oid.dotted_string == "1.3.6.1.5.5.7.48.1.6":   # OCSP Archive Cutoff
+                        raw = ext.value.value
+                        cutoff = core.GeneralizedTime.load(raw).native
+                        logging.debug(f" - Extension Value:     {cutoff.isoformat()}")
+                    elif ext.oid.dotted_string == "1.3.6.1.4.1.11129.2.4.5":  # SCT List
+                        try:
+                            sct_list = ext.value
+                            logging.debug(f" - Extension Contains {len(sct_list)} SCT(s):")
+
+                            for i, sct in enumerate(sct_list, 1):
+                                logging.debug(f"   SCT #{i}:")
+                                logging.debug(f"     Version: {sct.version.name}")
+                                logging.debug(f"     Log ID: {sct.log_id.hex()}")
+                                logging.debug(f"     Timestamp: {sct.timestamp}")
+                                logging.debug(f"     Entry Type: {sct.entry_type.name}")
+                        except Exception as e:
+                            logging.error(f"[OCSP] Could not parse SCT extension: {e}")
+                    elif isinstance(ext.value, UnrecognizedExtension):
                         value_bytes = ext.value.value
                     else:
                         value_bytes = ext.value
-                    logging.debug(f" - Extension Value:     {repr(value_bytes)}")
+                        logging.debug(f" - Extension Value:     {repr(value_bytes)}")
         except AttributeError:
             logging.debug("No extensions present in OCSP response")
         except Exception as e:

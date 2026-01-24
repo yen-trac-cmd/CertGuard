@@ -91,10 +91,10 @@ def check_caa_per_domain(config, domain: str, ca_identifiers: list[str]) -> tupl
                         continue
                     if rdata.flags not in (0, 128):    # All other flags are reserved per RFC8659.
                         logging.error(f'Invalid CAA flag value ({rdata.flags}) encountered; full CAA record: {rdata.to_text()}')
-                        warnings.append(f'&emsp;&emsp;▶ Invalid CAA flag value ("<code>{rdata.flags}</code>") encountered.')
+                        warnings.append(f'&emsp;&emsp;▶ Invalid CAA flag value ("<code>{rdata.flags}</code>") encountered: <code>{rdata.to_text()}</code>')
                     if rdata.tag.decode('utf-8').lower() not in ("issue","issuewild","issuemail","issuevmc","iodef","contactemail","contactphone"):
                         logging.error(f'Invalid CAA tag value ({rdata.tag.decode('utf-8')}) encountered; full CAA record: {rdata.to_text()}')
-                        warnings.append(f'&emsp;&emsp;▶ Invalid CAA tag value ("<code>{rdata.tag.decode('utf-8')}</code>") encountered.')
+                        warnings.append(f'&emsp;&emsp;▶ Invalid CAA tag value ("<code>{rdata.tag.decode('utf-8')}</code>") encountered: <code>{rdata.to_text()}</code>')
                     if not warnings:
                         if rdata.tag.decode('utf-8') == 'issue':
                             issue_properties.append(rdata.value.lower().decode('utf-8'))
@@ -138,7 +138,7 @@ def check_caa_per_domain(config, domain: str, ca_identifiers: list[str]) -> tupl
                                     warnings.append(f'&emsp;&emsp;▶ Matching CAA record (<code>{ca}</code>) <em>only</em> found at <b>.{check_domain}</b> eTLD!')
                                     return True, "<br>".join(warnings), records_found
                                 logging.warning(f"SUCCESS: CA from mapping ({ca}) matched CAA record published at {check_domain}.")
-                                return True, warnings, records_found
+                                return True, "<br>".join(warnings), records_found
 
         else:  # No answer rdata retrieved from CAA query
             logging.info(f'No published CAA record found at {check_domain}.')

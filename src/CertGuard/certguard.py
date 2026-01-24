@@ -159,17 +159,12 @@ def request(flow: http.HTTPFlow) -> None:
             if ocsp_addon.ocsp_sct_list:
                 if conn_id in ocsp_addon.ocsp_sct_list:
                     stapled_sct = ocsp_addon.ocsp_sct_list[conn_id]
-                    logging.debug(f"SCT extension found in stapled OCSP response: {stapled_sct}")
+                    flow.metadata["stapled_ocsp_sct_list"] = stapled_sct
+                    logging.debug(f"Attached stapled SCT list to flow metadata for {flow.request.pretty_host}")
                     del ocsp_addon.ocsp_sct_list[conn_id]
                     
-                    # Raise immediate level-6 blockpage during hunt for *any* website adding SCTs as OCSP extension inside stapled responses.
-                    finding = f'🎉 Found SCT in stapled OCSP response for <b>{flow.request.pretty_url}</b>!!'
-                    highest_error_level = ErrorLevel.FATAL.value
-                    findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.FATAL, finding, 10101))
-                    error_screen(config, flow, None, ErrorLevel.FATAL.color, [finding], ErrorLevel.FATAL.value)
-
-                    # TODO: If ever encounter real-life SCT in stapled OCSP response, pass into ct_logic module
-                    # for signature validation & inclusion proofing.
+                    finding = f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;Found SCT in stapled OCSP response.'
+                    findings.append(Finding(DisplayLevel.VERBOSE, func_name(), ErrorLevel.NONE, finding, 10101))
 
             # Clean up temporary storage
             del ocsp_addon.ocsp_by_connection[conn_id]
@@ -574,7 +569,7 @@ def http_connect_error(flow: http.HTTPFlow) -> None:
         logged_ip = "0.0.0.1"
 
     highest_error_level = -2
-    findings = [{"finding_id": 39900, "check": "mitmproxy_tls_connection", "error_level": -1, "message": "Unable to establish server connection"}]
+    findings = [{"finding_id": 39900, "check": "mitmproxy_tcp_connection", "error_level": -2, "message": "Unable to establish server connection"}]
     
     log_entry = {
         "Response Code": 645, 
@@ -602,8 +597,6 @@ def done() -> None:
             f.truncate()
             f.seek(0, os.SEEK_END)
             f.write(b'\n]')
-            #dane_stats = (f'\n"DANE TLSA Validator statistics": {{"Validated": {dane_validator.stats['validated']}, "Failed": {dane_validator.stats['dane_failed']}, "No TLSA": {dane_validator.stats['no_tlsa']}, "DNS Failed": {dane_validator.stats['dns_failed']}, "DNSSEC Failed": {dane_validator.stats['dnssec_failed']}}}')
-            #f.write(dane_stats.encode('utf-8'))
             f.write(b'\n}\n')
     except Exception as e:
         print(f'Error {e}')

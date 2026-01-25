@@ -28,6 +28,7 @@ def dane_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Findi
         dane_validator.perform_dane_check(flow.server_conn, cert_chain)
         
     logging.debug(f'dane_validator.dnssec_failure: {dane_validator.dnssec_failure}')
+    logging.debug(f'dane_validator.dns_timeout:    {dane_validator.dns_timeout}')
     logging.debug(f'dane_validator.dane_failure:   {dane_validator.dane_failure}')
     logging.debug(f'dane_validator.violation:      {dane_validator.violation}')
 

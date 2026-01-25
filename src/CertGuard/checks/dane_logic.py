@@ -46,7 +46,7 @@ class DANETLSAValidator:
     
     def __init__(self):
         self.cache = {}
-        self.stats = {"validated": 0, "dane_failed": 0, "no_tlsa": 0, "dns_timeout": 0, "dns_failed": 0, "dnssec_failed": 0}
+        self.stats = {"validated": 0, "dane_failed": 0, "no_tlsa": 0, "dns_retry_timeout": 0, "dns_failed": 0, "dnssec_failed": 0}
 
     def perform_dane_check(self, conn: connection.Server, chain: list[x509.Certificate]) -> None:
         """Performs DANE validation logic against certificate chain"""
@@ -62,39 +62,37 @@ class DANETLSAValidator:
         
         self.dane_used = True
         self.dane_validated = False
-        self.dns_timeout = False
+        self.dns_retry_timeout = False
         self.dnssec_failure = False
         self.dane_failure = False
+        self.dns_failure = False
         self.violation = None
 
         #logging.debug(f'Return from validate_dane():  {result}')
         if result == "no_tlsa":
             self.dane_used = False
             self.stats["no_tlsa"] += 1
-            logging.debug(f"DANE not in use for {hostname}.  {validation_error if validation_error else ""}")
+            logging.debug(f"DANE not in use for {hostname}.  {validation_error if validation_error else ''}")
         elif result == "dane_valid":
             self.dane_validated = True
             self.stats["validated"] += 1
             logging.info(f"DANE validation successful for {hostname}")
-        elif result == "dns_timeout":
-            self.dns_timeout = True
-            self.stats["dns_timeout"] +=1
-            error = f"⚠️ Exceeded retry attempts querying for TLSA records."
+        elif result == "dns_retry_timeout":
+            self.dns_retry_timeout = True
+            self.stats["dns_retry_timeout"] +=1
+            error = f"⚠️ Exceeded DNS retry attempts querying for TLSA records."
             logging.error(error)
             self.violation = error
         elif result == "dns_failed":
             self.dns_failure = True
             self.stats["dns_failed"] += 1
-            error = f"⚠️ Encountered DNS failures while trying to lookup TLSA records.{f'<br>&emsp;&emsp;▶ DNS Error: ' + ", ".join(validation_error) if validation_error else ''}"
-            logging.error(error)
-            self.violation = error
+            logging.error(f"Encountered DNS failures while trying to lookup TLSA records: {validation_error if validation_error else ''}")
+            self.violation = f"⚠️ Encountered DNS failures while trying to lookup TLSA records.{f'<br>&emsp;&emsp;▶ DNS Error: ' + ", ".join(validation_error) if validation_error else ''}"
         elif result == "dnssec_failed":
             self.dnssec_failure = True
             self.stats["dnssec_failed"] += 1
-            logging.warning(f"DNSSEC validation failed for {hostname}")
-            if config.require_dnssec:
-                logging.error(f"DNSSEC validation failed for DANE TLSA record {hostname}.")
-                self.violation = f"⛔ DNSSEC validation failed for DANE TLSA record. {f'<br>&emsp;&emsp;▶ DNS Error: ' + ", ".join(validation_error) if validation_error else ''}"
+            logging.error(f"DNSSEC validation failed for DANE TLSA record {hostname}.")
+            self.violation = f"⛔ DNSSEC validation failed for DANE TLSA record. {f'<br>&emsp;&emsp;▶ DNS Error: ' + ", ".join(validation_error) if validation_error else ''}"
         elif result == "dane_failed":
             self.dane_failure = True
             self.stats["dane_failed"] += 1
@@ -113,17 +111,18 @@ class DANETLSAValidator:
             chain:          Server certificate chain with root cert (if identified previously)
 
         Returns:
-            "dane_valid":    DANE validation successful
-            "dane_failed":   DANE validation failed
-            "no_tlsa":       No TLSA record found
-            "dns_timeout":   Exceeded allowed number of DNS query attempts for TLSA records
-            "dns_failed":    Error encountered during DNS query
-            "dnssec_failed": DNSSEC validation failed
-            errors:          Extended DNS errors, DANE validation error, or None
+            "dane_valid":          DANE validation successful
+            "dane_failed":         DANE validation failed
+            "no_tlsa":             No TLSA record found
+            "dns_retry_timeout":   Exceeded allowed number of DNS query attempts for TLSA records
+            "dns_failed":          Error encountered during DNS query
+            "dnssec_failed":       DNSSEC validation failed
+            errors:                Extended DNS errors, DANE validation error, or None
         """
         #TODO: Move resolver logic for both dane.py and CertGuard.py checks into helper_functions.py.
         #TODO: Add support for DoH/DoQ to allow for safe use of public resolvers.
         logging.warning(f"-----------------------------------Entering validate_dane()---------------------------------------")
+        self.authenticated_data = False
 
         # Check cache
         cache_key = (hostname, port)
@@ -150,7 +149,7 @@ class DANETLSAValidator:
                     got_response = True
                 except dns.exception.Timeout:
                     if attempt == 3:
-                        return "dns_timeout", None
+                        return "dns_retry_timeout", None
                     config.resolvers.rotate(1)
                     current_resolver = config.resolvers[0]
                     logging.error(f'DNS query for "{tlsa_name}" using resolver {config.resolvers[-1]} exceeded timeout of {config.dns_timeout} seconds.')
@@ -172,9 +171,9 @@ class DANETLSAValidator:
                 self.authenticated_data = True
                 logging.info(f'DNSSEEC response validation successful (Authenticated Data bit set in response).')
             else:
-                self.authenticated_data = False
                 logging.warning(f'Response data could not be validated by DNSSEC.')
 
+            dnssec_error = False
             ede_errors=[]
             if not response.rcode() == dns.rcode.NOERROR:
                 logging.warning(f'Received {response.rcode().name} DNS response.')
@@ -186,12 +185,16 @@ class DANETLSAValidator:
                             # Note: opt objects also expose discrete .code and .text attributes (if returned by server).
                             logging.warning(f"Encountered {opt.to_text()}")
                             ede_errors.append(get_ede_description(opt.code))
+                            if opt.code in range(1,13):
+                                dnssec_error = True
 
                 if response.rcode() == dns.rcode.NXDOMAIN:
                     logging.warning(f'  --> No resource records exist for {tlsa_name}.')
                     return "no_tlsa", ede_errors
-                elif response.rcode() == dns.rcode.SERVFAIL and ede_errors:
+                elif response.rcode() == dns.rcode.SERVFAIL and dnssec_error:
                     return "dnssec_failed", ede_errors
+                elif response.rcode() == dns.rcode.SERVFAIL:
+                    return "dns_failed", ede_errors if ede_errors else ['SERVFAIL error']
                 elif response.rcode() == dns.rcode.FORMERR:
                     logging.error('  --> Query was malformed or otherwise uninterpretable by the DNS server.')
                     return "dns_failed", ede_errors
@@ -343,13 +346,12 @@ class DANETLSAValidator:
 
     
     def done(self) -> None:
-        
         """Called when the add-on is unloaded."""
         print("DANE TLSA Validator statistics:")
         print(f"  Validated: {self.stats['validated']}")
         print(f"  Failed: {self.stats['dane_failed']}")
         print(f"  No TLSA: {self.stats['no_tlsa']}")
-        print(f"  DNS Timeout: {self.stats['dns_timeout']}")
+        print(f"  DNS Retry Timeout: {self.stats['dns_retry_timeout']}")
         print(f"  DNS Failed: {self.stats['dns_failed']}")
         print(f"  DNSSEC Failed: {self.stats['dnssec_failed']}") 
     

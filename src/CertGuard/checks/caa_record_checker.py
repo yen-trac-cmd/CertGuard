@@ -86,20 +86,24 @@ def check_caa_per_domain(config, domain: str, ca_identifiers: list[str]) -> tupl
                 issuewild_properties = []
 
                 for rdata in rrset:
+                    malformed = False
                     if not isinstance(rdata, CAA.CAA):
                         logging.debug(f' Skipping checks against malformed or non-CAA record: {rrset}')
                         continue
                     if rdata.flags not in (0, 128):    # All other flags are reserved per RFC8659.
                         logging.error(f'Invalid CAA flag value ({rdata.flags}) encountered; full CAA record: {rdata.to_text()}')
                         warnings.append(f'&emsp;&emsp;▶ Invalid CAA flag value ("<code>{rdata.flags}</code>") encountered: <code>{rdata.to_text()}</code>')
+                        malformed = True
                     if rdata.tag.decode('utf-8').lower() not in ("issue","issuewild","issuemail","issuevmc","iodef","contactemail","contactphone"):
                         logging.error(f'Invalid CAA tag value ({rdata.tag.decode('utf-8')}) encountered; full CAA record: {rdata.to_text()}')
                         warnings.append(f'&emsp;&emsp;▶ Invalid CAA tag value ("<code>{rdata.tag.decode('utf-8')}</code>") encountered: <code>{rdata.to_text()}</code>')
-                    if not warnings:
-                        if rdata.tag.decode('utf-8') == 'issue':
-                            issue_properties.append(rdata.value.lower().decode('utf-8'))
-                        if rdata.tag.decode('utf-8') == 'issuewild':
-                            issuewild_properties.append(rdata.value.lower().decode('utf-8'))
+                        malformed = True
+                    if malformed:
+                        continue
+                    if rdata.tag.decode('utf-8') == 'issue':
+                        issue_properties.append(rdata.value.lower().decode('utf-8'))
+                    if rdata.tag.decode('utf-8') == 'issuewild':
+                        issuewild_properties.append(rdata.value.lower().decode('utf-8'))
                 
                 logging.debug(f'Is wildcard? {is_wildcard}')
                 logging.debug(f'issuewild_properties: {issuewild_properties}')

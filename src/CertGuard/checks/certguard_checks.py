@@ -27,24 +27,32 @@ def dane_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Findi
         logging.debug(f'Flow Connection:         {flow.server_conn}')
         dane_validator.perform_dane_check(flow.server_conn, cert_chain)
         
-    logging.debug(f'dane_validator.dnssec_failure: {dane_validator.dnssec_failure}')
-    logging.debug(f'dane_validator.dns_timeout:    {dane_validator.dns_timeout}')
-    logging.debug(f'dane_validator.dane_failure:   {dane_validator.dane_failure}')
-    logging.debug(f'dane_validator.violation:      {dane_validator.violation}')
+    logging.debug(f'dane_validator.dane_failure:      {dane_validator.dane_failure}')
+    logging.debug(f'dane_validator.dnssec_failure:    {dane_validator.dnssec_failure}')
+    logging.debug(f'dane_validator.dns_failure:       {dane_validator.dns_failure}')
+    logging.debug(f'dane_validator.dns_retry_timeout: {dane_validator.dns_retry_timeout}')
+    #logging.debug(f'dane_validator.violation:         {dane_validator.violation}')
 
-    if not dane_validator.dane_used:
+    if dane_validator.dane_used == False:
         return Finding(None, None, ErrorLevel.NONE, None, 20200)
-    else: # DANE in use
-        if dane_validator.dane_validated:
-            return Finding(DisplayLevel.POSITIVE, func_name(), ErrorLevel.NONE, f'✅ DANE TLSA Record successfully validated.', 20201)
-        elif dane_validator.dane_failure == True and config.enforce_dane:
+    elif dane_validator.dns_retry_timeout:
+        return Finding(None, func_name(), ErrorLevel.NOTICE, f'{dane_validator.violation}', 20201)
+    elif dane_validator.dane_validated:
+        return Finding(DisplayLevel.POSITIVE, func_name(), ErrorLevel.NONE, f'✅ DANE TLSA Record successfully validated.', 20202)
+    elif dane_validator.dane_failure == True:
+        if config.enforce_dane:
             logging.error("Blocking request per 'enforce_dane' configuration.")
-            return Finding(DisplayLevel.CRITICAL, func_name(), ErrorLevel.FATAL, f'{dane_validator.violation}', 20202)
-        elif dane_validator.dnssec_failure == True and config.require_dnssec:
-            logging.error("Blocking request per 'enforce_dnssec' configuration.")
             return Finding(DisplayLevel.CRITICAL, func_name(), ErrorLevel.FATAL, f'{dane_validator.violation}', 20203)
         else:
-            return Finding(DisplayLevel.CRITICAL, func_name(), ErrorLevel.CRIT, f'{dane_validator.violation}', 20204)
+            return Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.WARN, f'{dane_validator.violation}', 20204)
+    elif dane_validator.dnssec_failure == True:
+        if config.require_dnssec:
+            logging.error("Blocking request per 'enforce_dnssec' configuration.")
+            return Finding(DisplayLevel.CRITICAL, func_name(), ErrorLevel.FATAL, f'{dane_validator.violation}', 20205)
+        else:
+            return Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.WARN, f'{dane_validator.violation}', 20206)
+    else:
+        return Finding(DisplayLevel.CRITICAL, func_name(), ErrorLevel.CRIT, f'{dane_validator.violation}', 20207)
 
 def root_country_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Finding:
     """
@@ -439,6 +447,7 @@ def sct_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Findin
 
     cert = cert_chain[0]
     issuer_cert = cert_chain[1]
+    stapled_response = None
     stapled_index = 0
 
     warnings = []
@@ -474,7 +483,7 @@ def sct_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Findin
         
         # Validate SCT digital signatures (if enabled)
         if config.verify_signatures:
-            if i >= stapled_index:
+            if stapled_response and i >= stapled_index:
                 validated, error, leaf_struct = validate_sct_signature(cert, issuer_cert, sct, "X509")
             else:
                 validated, error, leaf_struct = validate_sct_signature(cert, issuer_cert, sct)
@@ -679,8 +688,16 @@ def dnssec_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Fin
     An imperfect, but low-cost extra check to see if a domain is DNSSEC-signed by leveraging the existing DANE TLSA record check. This check 
     will under-report the number of signed zones given the somewhat atypical record type for the DANE query, but those reported as signed WILL be signed.
     """
+    from checks.helper_functions import zone_dnssec_protected
+    validated = False
+
     logging.warning(f"-----------------------------------Entering dnssec_check()----------------------------------------")
     if dane_validator.authenticated_data:
+        validated = True
+    elif zone_dnssec_protected(flow.request.pretty_host):
+        validated = True
+
+    if validated:
         logging.debug('DNSSEC is enabled for zone.')
         return Finding(DisplayLevel.POSITIVE, func_name(), ErrorLevel.NONE, f'✅ The DNS zone is DNSSEC-signed and has a valid chain of trust.', 21500)
     else:

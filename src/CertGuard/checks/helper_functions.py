@@ -1,8 +1,12 @@
 import certifi
+import dns.resolver
+import dns.flags
+import dns.rdatatype
 import logging
 import os
 import sqlite3
 import sys
+from config.certguard_config import Config
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes, serialization
@@ -12,6 +16,8 @@ from mitmproxy import http
 from requests_cache import CachedSession
 from typing import Tuple
 from urllib.parse import urlparse
+
+config = Config()
 
 def is_navigation_request(flow: http.HTTPFlow, referer_header, accept_header) -> bool:
     logging.warning(f"----------------------------------Entering is_navigation_request()-------------------------------")
@@ -277,5 +283,25 @@ def cache_cert(cert: x509.Certificate, cert_ski_hex: str, cached_dir: str) -> No
         logging.info(f"Saved certificate to {pem_path}")
 
 
+def zone_dnssec_protected(zone, timeout=3):
+    r = dns.resolver.Resolver()
+    r.timeout = timeout
+    r.lifetime = timeout
+    r.nameservers = config.user_resolvers
 
-    
+    # Request DNSSEC records
+    r.use_edns(edns=True, ednsflags=dns.flags.DO)
+
+    try:
+        answer = r.resolve(zone, dns.rdatatype.DNSKEY)
+        ad_set = bool(answer.response.flags & dns.flags.AD)
+
+        return True if ad_set else False
+
+    except dns.resolver.NoAnswer:
+        logging.error(f'No answer received from resolver while attempting to perform DNSSEC validation.')
+        return False
+
+    except dns.exception.DNSException as e:
+        logging.error(f'Exception encountered performing DNSSEC validation: {e}')
+        return False

@@ -440,18 +440,18 @@ def request(flow: http.HTTPFlow) -> None:
 
     my_checks = [
         dane_check,
-        #root_country_check,
-        #controlled_CA_checks,
-        #expiry_check, 
-        #revocation_checks, 
-        #identity_check, 
-        #critical_ext_check,
-        #prior_approval_check,
-        #sct_check, 
+        root_country_check,
+        controlled_CA_checks,
+        expiry_check, 
+        revocation_checks, 
+        identity_check, 
+        critical_ext_check,
+        prior_approval_check,
+        sct_check, 
         #ct_quick_check,         # Can use this or the sct_check() and revocation_checks() for more thorough (albeit slower) validation.
-        #caa_check,
-        #test_check,
-        #x509_version_check,
+        caa_check,
+        test_check,
+        x509_version_check,
         dnssec_check,
     ] 
 

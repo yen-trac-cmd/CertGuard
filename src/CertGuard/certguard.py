@@ -463,10 +463,10 @@ def request(flow: http.HTTPFlow) -> None:
         finding: Finding = check(flow, cert_chain)
         if finding.error_level.value > highest_error_level:
             highest_error_level = finding.error_level.value
-            blockpage_color = finding.error_level.color
         if finding.message:
             findings.append(finding)
-    
+        blockpage_color = ErrorLevel(highest_error_level).color
+
     logging.info(f'-----------------------------------END verification for {host}--------------------------------------------')
 
     # Sort findings by display level and structure as JSON for the logfile.
@@ -481,6 +481,7 @@ def request(flow: http.HTTPFlow) -> None:
     logging.warning(f"----> The highest_error_level value is: {highest_error_level}.")
     if highest_error_level > ErrorLevel.NONE.value:
         display_messages = [f.message for f in filtered_findings]
+        logging.error(f'values for color / error: {blockpage_color, highest_error_level}')
         error_screen(config, flow, token, blockpage_color, display_messages, highest_error_level)
         record_decision(config.db_path, host, "blocked", root_hash, root_subject, root_expiry, tag)
         logging.error(f"Request to {host} blocked; Token={token}")

@@ -282,7 +282,6 @@ def cache_cert(cert: x509.Certificate, cert_ski_hex: str, cached_dir: str) -> No
         f.write(cert_pem_bytes) #.decode('utf-8')
         logging.info(f"Saved certificate to {pem_path}")
 
-
 def zone_dnssec_protected(zone, timeout=3):
     r = dns.resolver.Resolver()
     r.timeout = timeout

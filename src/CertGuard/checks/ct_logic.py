@@ -48,12 +48,12 @@ class RevocationReason(IntEnum):
     def _missing_(cls, value: int):
         return cls.unknown
 
-def load_log_list(old_ct_log: json = None) -> dict:
+def load_log_list(alt_ct_log: json = None) -> dict:
     """
     Loads Google's well-known CT log list and transforms it into a dictionary of CT log entry metadata, keyed by log_id_bytes.
 
     Args:
-        old_ct_log: Optionally specify a filepath for a legacy copy of the Certificate Transparency log file for testing purposes against older certs.
+        alt_ct_log: Optionally specify a filepath for an alternate Certificate Transparency log file.
 
     Returns:
         mapping:    A transformed dictionary that can be used by subsequent SCT verification functions.
@@ -80,14 +80,14 @@ def load_log_list(old_ct_log: json = None) -> dict:
 
     log_lists = [ct_log_list.json()]
 
-    if old_ct_log:
-        if os.path.exists(old_ct_log):
+    if alt_ct_log:
+        if os.path.exists(alt_ct_log):
             try:
-                with open(old_ct_log, "r", encoding="utf-8") as f:
+                with open(alt_ct_log, "r", encoding="utf-8") as f:
                     old_log = json.load(f)
                     log_lists.append(old_log)
             except Exception as e:
-                logging.error(f"Failed to load legacy CT log list: {e}")
+                logging.error(f"Failed to load alternate CT log list: {e}")
 
     # Transform log_list mapping
     mapping = {}
@@ -445,6 +445,7 @@ def verify_inclusion(sct_data: bytes, ct_log_url: str, sct_timestamp: int, log_m
     REQUEST_TIMEOUT = 4.5 # seconds
     sth_url = ct_log_url + 'ct/v1/get-sth'
     proof_url_template = ct_log_url + 'ct/v1/get-proof-by-hash?hash={}&tree_size={}'
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'}
 
     #Compute the RFC6962 leaf hash for a MerkleLeaf.  The 0x00 prefix is for timestamped entries (X.509 cert / precert).
     leaf_hash = hashlib.sha256(b"\x00" + sct_data).digest()
@@ -453,7 +454,7 @@ def verify_inclusion(sct_data: bytes, ct_log_url: str, sct_timestamp: int, log_m
     # Fetch latest Signed Tree Head from CT log server
     try:
         logging.debug(f'Attempting to fetch latest STH from: {sth_url}')
-        sth_resp = requests.get(sth_url, timeout=REQUEST_TIMEOUT)
+        sth_resp = requests.get(sth_url, timeout=REQUEST_TIMEOUT, headers=headers)
         sth_resp.raise_for_status()
     except requests.exceptions.Timeout:
         logging.error("Timeout fetching CT STH.")
@@ -482,7 +483,7 @@ def verify_inclusion(sct_data: bytes, ct_log_url: str, sct_timestamp: int, log_m
     proof_url = proof_url_template.format(leaf_hash_enc, tree_size)
     try:
         logging.debug(f'Attempting to fetch inclusion proof from: {proof_url}')
-        proof_resp = requests.get(proof_url, timeout=REQUEST_TIMEOUT)
+        proof_resp = requests.get(proof_url, timeout=REQUEST_TIMEOUT, headers=headers)
         if proof_resp.status_code == 404:
             if sct_timestamp + log_mmd >= int(time.time()):
                 logging.info("Note: Leaf might not yet be included in the current STH (e.g. within MMD).")

@@ -16,8 +16,10 @@ from utils.x509 import get_cert_domains
 config = Config()
 dane_validator = DANETLSAValidator()
 
-# Load Certificate Transparency log list, optionally passing in legacy CT log file.
-ct_log_map = load_log_list("./resources/legacy_log.json")
+# Load Certificate Transparency log list, optionally passing in an alternate CT log file.
+#ct_log_map = load_log_list()
+ct_log_map = load_log_list("./resources/all_logs_list.json")    # Uncomment for best-effort attempt to verify SCTs against retired CT logs.
+#ct_log_map = load_log_list("./resources/yandex_ct_logs.json")   # Uncomment to load Russian CT log list.
 
 def dane_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Finding:
     """Check for DANE TLSA records and, if found, validate server certificate per RFC 6698"""

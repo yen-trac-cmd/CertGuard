@@ -264,7 +264,6 @@ def validate_sct_signature(cert: x509.Certificate, issuer_cert: x509.Certificate
     if entry_type == 'X509':
         cert_der = cert.public_bytes(serialization.Encoding.DER)
         sct_data += b"\x00\x00"                                                     # LogEntryType: 0x0000 = X509_cert_entry
-        #sct_data += issuer_public_key_hash                                              # PreCert.opaque: issuer_key_hash[32]
         sct_data += bytes.fromhex(hex(len(cert_der))[2:].zfill(6))                  # 3-byte-length of cert data
         sct_data += cert_der                                                        # X509 Certificate (actual bytes)
     else:

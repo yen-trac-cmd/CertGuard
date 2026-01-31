@@ -17,8 +17,8 @@ config = Config()
 dane_validator = DANETLSAValidator()
 
 # Load Certificate Transparency log list, optionally passing in an alternate CT log file.
-#ct_log_map = load_log_list()
-ct_log_map = load_log_list("./resources/all_logs_list.json")    # Uncomment for best-effort attempt to verify SCTs against retired CT logs.
+ct_log_map = load_log_list()
+#ct_log_map = load_log_list("./resources/all_logs_list.json")    # Uncomment for best-effort attempt to verify SCTs against retired CT logs.
 #ct_log_map = load_log_list("./resources/yandex_ct_logs.json")   # Uncomment to load Russian CT log list.
 
 def dane_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Finding:
@@ -34,6 +34,9 @@ def dane_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Findi
     logging.debug(f'dane_validator.dns_failure:       {dane_validator.dns_failure}')
     logging.debug(f'dane_validator.dns_retry_timeout: {dane_validator.dns_retry_timeout}')
     #logging.debug(f'dane_validator.violation:         {dane_validator.violation}')
+
+    flow.metadata["dane_validated"] = dane_validator.dane_validated
+    flow.metadata["dane_usage_type"] = dane_validator.dane_usage_type
 
     if dane_validator.dane_used == False:
         return Finding(None, None, ErrorLevel.NONE, None, 20200)
@@ -133,7 +136,7 @@ def root_country_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) 
         violation = f"⚠️ The {ca_type} certificate lists an invalid two-letter country code: <b>{ca_country}</b>"
         return Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.CRIT, violation, 20306)
 
-    violation = f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;Root CA Country: {country_name}.'
+    violation = f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;Root CA Country: {country_name}'
     return Finding(DisplayLevel.VERBOSE, func_name(), ErrorLevel.NONE, violation, 20307)
 
 def controlled_CA_checks(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Finding:
@@ -467,9 +470,15 @@ def sct_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Findin
 
     if not scts:
         # TODO: Although these are exceedingly rare, update code to account for external SCTs delivered during TLS negotation.
-        logging.error(f"Cert for {flow.request.pretty_url} missing SCT(s)!")
-        violation = '⚠️ Certificate missing <a href=https://certificate.transparency.dev/howctworks/ target="_blank">Signed Certificate Timestamps</a> (SCTs).'
-        return Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.ERROR, violation, 21001)
+        
+        # If DANE overrides are enabled, suppress error for certs validated via DANE usage type 2 or 3
+        if config.dane_override and flow.metadata.get("dane_validated"):
+            if flow.metadata.get("dane_usage_type") in (2,3):
+                return Finding(None, None, ErrorLevel.NONE, None, 0)
+        else:
+            logging.error(f"Cert for {flow.request.pretty_url} missing SCT(s)!")
+            violation = '⚠️ Certificate missing <a href=https://certificate.transparency.dev/howctworks/ target="_blank">Signed Certificate Timestamps</a> (SCTs).'
+            return Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.ERROR, violation, 21001)
     
     # Print out SCT details for debugging purposes
     for i, sct in enumerate(scts, 1):
@@ -633,7 +642,13 @@ def caa_check(flow: http.HTTPFlow, cert_chain: list[x509.Certificate]) -> Findin
             caa_violations.append(domain)
 
     if not records_found:
-        return Finding(DisplayLevel.VERBOSE, func_name(), ErrorLevel.NONE, f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;No published CAA records identified.', 21203)
+        # Suppress missing CAA informational message for DANE-validated chains/certs
+        if config.dane_override and flow.metadata.get("dane_validated"):
+            if flow.metadata.get("dane_usage_type") in (2,3):
+                logging.debug('Suppressing CAA messages due to chain/cert passing DANE type 2/3 validation.')
+                return Finding(None, None, ErrorLevel.NONE, None, 0)
+        else:
+            return Finding(DisplayLevel.VERBOSE, func_name(), ErrorLevel.NONE, f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;No published CAA records identified.', 21203)
 
     if caa_violations:
         return_violations.append(f'⚠️ FQDN(s) in cert not authorized by CAA record: <b>{",".join(caa_violations)}</b>')

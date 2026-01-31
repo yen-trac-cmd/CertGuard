@@ -126,3 +126,7 @@ enforce_dane = false
 # Set 'require_dnssec' to true to ensure that TLSA resource record lookups are validated via DNSSEC (per DANE specification).
 # Note: This option only exists for experimentation purposes.  For production use cases, DNSSEC is mandatory!
 require_dnssec = true
+
+# Set 'dane_override' to true to allow suppression of WebPKI warnings for certs/chains validated by TLSA type 2 (DANE_TrustAnchor) or 
+# type 3 (DANE_EndEntity) records.  See https://www.rfc-editor.org/rfc/rfc6698#section-2.1.1 for info.
+dane_override = false

@@ -53,20 +53,20 @@ class DANETLSAValidator:
         logging.warning(f"Flow Connection ID:       {conn.id}")
         hostname = conn.address[0]
         port = conn.address[1]
+        self.dane_used = True
+        self.dane_validated = False
+        self.dane_usage_type = None
+        self.dns_retry_timeout = False
+        self.dnssec_failure = False
+        self.dane_failure = False
+        self.dns_failure = False
+        self.violation = None
         
         # Validate chain using DANE
         try:
             result, validation_error = self.validate_dane(hostname, port, chain)
         except Exception as e:
             logging.error(f"Error during DANE validation for {hostname}: {e}")
-        
-        self.dane_used = True
-        self.dane_validated = False
-        self.dns_retry_timeout = False
-        self.dnssec_failure = False
-        self.dane_failure = False
-        self.dns_failure = False
-        self.violation = None
 
         #logging.debug(f'Return from validate_dane():  {result}')
         if result == "no_tlsa":

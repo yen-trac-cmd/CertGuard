@@ -12,6 +12,7 @@ from checks.tls_logic import OCSPStaplingConfig
 from config.certguard_config import BYPASS_PARAM, Config, DisplayLevel, ErrorLevel, Finding, Logger
 from cryptography.x509 import Certificate, NameOID
 from cryptography.hazmat.primitives import hashes
+from checks.dane_logic import TLSA_Enum
 from error_screen import error_screen
 from utils.misc import func_name
 from utils.x509 import fetch_issuer_certificate, get_akid, get_skid
@@ -228,8 +229,6 @@ def request(flow: http.HTTPFlow) -> None:
         if top_of_chain.subject == top_of_chain.issuer:
             root_already_present = True
             root = top_of_chain
-            highest_error_level = ErrorLevel.ERROR.value
-            findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.ERROR, f'⚠️ Root certificate included in server-supplied cert chain.', 10103))
         else:
             while True:
                 cert_aki = get_akid(top_of_chain)
@@ -306,7 +305,30 @@ def request(flow: http.HTTPFlow) -> None:
         cert_chain.extend(fetched_certs)
 
     # Verify full certificate chain and retrieve validated root cert.
+    #TODO: Add logic for DANE usage type 2, where root may be a private CA.
     root_cert, claimed_root, verification_error, self_signed, tag = get_root_cert(cert_chain, root, roots_by_ski, deprecated_roots)
+
+    # Add root cert to chain (if not already present) for a complete / validated chain
+    if root_cert and not root_already_present:
+        cert_chain.append(root_cert)
+    
+    # Perform DANE check
+    dane_type = None
+    finding: Finding = dane_check(flow, cert_chain)
+    if finding.message:
+        findings.append(finding)
+
+    dane_validated = flow.metadata.get("dane_validated")
+    if dane_validated:
+        dane_type = flow.metadata.get("dane_usage_type")
+        findings.append(Finding(DisplayLevel.VERBOSE, func_name(), ErrorLevel.NONE, f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;Matching TLSA Usage Type: {TLSA_Enum.Usage(dane_type).name} ({dane_type})', 55550))
+
+    if root_already_present:
+        if config.dane_override and dane_type in (2,3):
+            pass
+        else:        
+            findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.ERROR, f'⚠️ Root certificate included in server-supplied cert chain.', 10103))
+            highest_error_level = ErrorLevel.ERROR.value
 
     if root_cert:
         root_cn = root_cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
@@ -314,17 +336,16 @@ def request(flow: http.HTTPFlow) -> None:
         root_hash = root_cert.fingerprint(hashes.SHA256()).hex()
         root_subject = root_cert.subject.rfc4514_string()
         root_expiry = root_cert.not_valid_after_utc
-        
-        # Add root cert to chain (if not already present) for a complete / validated chain
-        if not root_already_present:
-            cert_chain.append(root_cert)
-        
-        # Check for Deprecated root
-        if tag == "DEPRECATED":
+
+        # Check for Deprecated or Untrusted roots
+        if dane_validated and config.dane_override:
+            if dane_type in (2,3):
+                pass
+        elif tag == "DEPRECATED":
             findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.ERROR, f'⚠️ Root certificate (<code>{root_desc}</code>) is deprecated!', 10105))
             blockpage_color = ErrorLevel.ERROR.color
         elif tag == "UNTRUSTED":
-            findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.FATAL, f'⛔ Root certificate (<code>{root_desc}</code>) is Untrusted!', 10106))
+            findings.append(Finding(DisplayLevel.CRITICAL, func_name(), ErrorLevel.FATAL, f'⛔ Root certificate (<code>{root_desc}</code>) is Untrusted!', 10106))
             blockpage_color = ErrorLevel.FATAL.color
         
         # Fetch org name for verbose block pages        
@@ -336,18 +357,20 @@ def request(flow: http.HTTPFlow) -> None:
             findings.append(Finding(DisplayLevel.CRITICAL, func_name(), ErrorLevel.CRIT, violation, 10107))
         else:
             findings.append(Finding(DisplayLevel.VERBOSE, func_name(), ErrorLevel.NONE, f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;Root CA Operator: {ca_org}', 10108))
-
     elif self_signed:
-        #TODO: Add logic for DANE usage type 3, where cert may be self-attested in TLSA record.
-        findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.ERROR, f'⚠️ Encountered self-signed certificate:&emsp;&emsp;<b>{self_signed.subject.rfc4514_string()}</b>', 10109))
-        highest_error_level = ErrorLevel.ERROR.value
-        blockpage_color = ErrorLevel.ERROR.color
+        # If DANE overrides are enabled, suppress self-signed error for certs validated via DANE usage type 3
+        if dane_validated and config.dane_override:
+            if dane_type == 3:
+                pass
+        else:
+            findings.append(Finding(DisplayLevel.WARNING, func_name(), ErrorLevel.ERROR, f'⚠️ Encountered self-signed certificate:&emsp;&emsp;<b>{self_signed.subject.rfc4514_string()}</b>', 10109))
+            highest_error_level = ErrorLevel.ERROR.value
+            blockpage_color = ErrorLevel.ERROR.color
+        
         root_hash = self_signed.fingerprint(hashes.SHA256()).hex()
         root_subject = self_signed.subject.rfc4514_string()
         root_expiry = self_signed.not_valid_after_utc
-    
     elif claimed_root:
-        #TODO: Add logic for DANE usage type 2, where root may be a private CA.
         #logging.error(f'Could not validate chained cert against claimed Issuer of: {claimed_root}.')
         if tag == "INVALID":
             findings.append(Finding(DisplayLevel.CRITICAL, func_name(), ErrorLevel.FATAL, f'⛔ Signature on {top_of_chain.subject.rfc4514_string()} failed to verify against claimed root of:<br>&emsp;&emsp;<b>{claimed_root}</b>', 10110))
@@ -439,7 +462,7 @@ def request(flow: http.HTTPFlow) -> None:
     }
 
     my_checks = [
-        dane_check,
+        #dane_check,
         root_country_check,
         controlled_CA_checks,
         expiry_check, 
@@ -481,7 +504,6 @@ def request(flow: http.HTTPFlow) -> None:
     logging.warning(f"----> The highest_error_level value is: {highest_error_level}.")
     if highest_error_level > ErrorLevel.NONE.value:
         display_messages = [f.message for f in filtered_findings]
-        logging.error(f'values for color / error: {blockpage_color, highest_error_level}')
         error_screen(config, flow, token, blockpage_color, display_messages, highest_error_level)
         record_decision(config.db_path, host, "blocked", root_hash, root_subject, root_expiry, tag)
         logging.error(f"Request to {host} blocked; Token={token}")

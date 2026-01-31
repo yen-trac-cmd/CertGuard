@@ -72,6 +72,7 @@ class Config:
         self.verify_inclusion  = cfg["sct_config"]["verify_inclusion"]
         self.enforce_dane      = cfg["dane_config"]["enforce_dane"]
         self.require_dnssec    = cfg["dane_config"]["require_dnssec"]
+        self.dane_override     = cfg["dane_config"]["dane_override"]
         self.country_list      = [country.upper() for country in cfg["country_filtering"]["country_list"]]
         self.blocklist         = [country.upper() for country in cfg["country_filtering"]["blocklist"]]
 

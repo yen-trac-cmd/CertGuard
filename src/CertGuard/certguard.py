@@ -324,6 +324,7 @@ def request(flow: http.HTTPFlow) -> None:
         findings.append(Finding(DisplayLevel.VERBOSE, func_name(), ErrorLevel.NONE, f'<span style="color: blue;">&nbsp;🛈</span>&nbsp;&nbsp;Matching TLSA Usage Type: {TLSA_Enum.Usage(dane_type).name} ({dane_type})', 55550))
 
     if root_already_present:
+        logging.info('Root certificate included in chain provided by server.')
         if config.dane_override and dane_type in (2,3):
             pass
         else:        

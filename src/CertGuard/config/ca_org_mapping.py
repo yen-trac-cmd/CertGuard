@@ -194,5 +194,5 @@ ca_org_to_caa = {
   "Verokey": ["digicert.com"],
   "WoSign CA Limited": ["wosign.com"],
   "WoTrus CA Limited": ["wotrust.com"],
-  "ZeroSSL": ["zerossl.com"],
+  "ZeroSSL": ["sectigo.com", "comodo.com", "comodoca.com", "usertrust.com", "trust-provider.com", "entrust.net", "affirmtrust.com"],
 }

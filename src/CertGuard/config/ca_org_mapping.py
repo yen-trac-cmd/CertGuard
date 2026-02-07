@@ -187,6 +187,7 @@ ca_org_to_caa = {
   "TrustAsia Technologies, Inc.": ["trustasia.com"],
   "TWCA": ["twca.com.tw"],
   "The USERTRUST Network": ["sectigo.com", "usertrust.com", "trust-provider.com", "comodo.com", "comodoca.com", "entrust.net", "affirmtrust.com"],
+  "Trust Provider B.V.": ["www.digicert.com", "digicert.com", "digicert.ne.jp", "cybertrust.ne.jp", "thawte.com", "geotrust.com", "rapidssl.com", "symantec.com", "volusion.digitalcertvalidation.com", "stratossl.digitalcertvalidation.com", "intermediatecertificate.digitalcertvalidation.com", "1and1.digitalcertvalidation.com", "amazon.com", "amazontrust.com", "awstrust.com", "amazonaws.com", "digitalcertvalidation.com", "quovadisglobal.com"],
   "Trustwave Holdings, Inc.": ["trustwave.com", "securetrust.com", "vikingcloud.com"],
   "UniTrust": ["sheca.com", "imtrust.cn", "wwwtrust.cn"],
   "Viking Cloud, Inc.": ["trustwave.com", "securetrust.com", "vikingcloud.com"],

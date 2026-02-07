@@ -1,4 +1,4 @@
-# CertGuard
+![CertGuard Logo](resources/CertGuard_logo.png)
 
 CertGuard is a **proof-of-concept** add-on for **mitmproxy** that extends TLS certificate and Certificate Authority (CA) validation **beyond what standard web browsers provide**.
 It is designed for **security-conscious, technically-savvy users** who want deeper visibility into, and control over, certificate trust decisions made while browsing the Internet.

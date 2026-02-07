@@ -143,7 +143,7 @@ ca_org_to_caa = {
   "Encryption Everywhere CA": ["digicert.com"],
   "Entrust": ["entrust.net"],
   "Entrust, Inc.": ["entrust.net"],
-  "Entrust Limited": ["entrust.net"],
+  "Entrust Limited": ["sectigo.com", "comodo.com", "comodoca.com", "usertrust.com", "trust-provider.com", "entrust.net", "affirmtrust.com"],
   "Entrust Corporation": ["entrust.net"],
   "Eviden": ["atos.net", "pki.eviden.com"],
   "FNMT-RCM": ["fnmt.es"],

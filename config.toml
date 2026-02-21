@@ -129,4 +129,4 @@ require_dnssec = true
 
 # Set 'dane_override' to true to allow suppression of WebPKI warnings for certs/chains validated by TLSA type 2 (DANE_TrustAnchor) or 
 # type 3 (DANE_EndEntity) records.  See https://www.rfc-editor.org/rfc/rfc6698#section-2.1.1 for info.
-dane_override = false
+dane_override = true
